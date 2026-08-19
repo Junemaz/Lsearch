@@ -14,17 +14,23 @@ codegraph（`@colbymchenry/codegraph`，本机 `/root/.codegraph/versions/v1.5.0
 即 `cordis.patch.yml` 顶部 YAML 数组里再加一项）：
 
 ```yaml
-- id: mcp-codegraph
-  name: '@deepseek-ai/dsh-mcp-client'
-  config:
-    serverName: codegraph
-    transport: stdio
-    command: /root/.codegraph/versions/v1.5.0/bin/codegraph
-    args: ['serve', '--mcp']
-    cwd: /home/code/Lsearch
-    # 可选：跟随其自身的孤儿看门狗（bin/codegraph 用 $CODEGRAPH_HOST_PPID）
-    # env:
-    #   CODEGRAPH_HOST_PPID: !!js process.env.PPID
+- insert:
+    - id: mcp-codegraph
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: codegraph
+        transport: stdio
+        command: /root/.codegraph/versions/v1.5.0/bin/codegraph
+        args: ['serve', '--mcp']
+        cwd: /home/code/Lsearch
+        # 可选：跟随其自身的孤儿看门狗（bin/codegraph 用 $CODEGRAPH_HOST_PPID）
+        # env:
+        #   CODEGRAPH_HOST_PPID: !!js process.env.PPID
+```
+
+> 注意：patch 必须是 **`- insert:` 包裹插件行**（与 dsh-base 的
+> `cordis.patch.yml` 结构一致）。若直接写一行裸 `- id:`，加载器会**静默忽略**，
+> 表现为"重启了却看不到工具"——这是最容易踩的坑。
 ```
 
 启用后工具以 `mcp__codegraph__<工具名>` 出现（如
