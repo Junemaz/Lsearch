@@ -178,7 +178,9 @@ void printHighlight(const std::string& name, const std::string& qlow) {
 int main() {
   setlocale(LC_ALL, "");
   initscr();
-  cbreak();
+  // raw() 关闭 ISIG/IXON：让 ^C / ^Q（XON）以按键到达，而非被信号/流控吞掉，
+  // 从而能优雅退出（endwin + 回收线程）。普通输入行为与 cbreak 一致。
+  raw();
   noecho();
   keypad(stdscr, TRUE);
   nodelay(stdscr, TRUE);

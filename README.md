@@ -47,6 +47,10 @@ lsearch-tui                      # 输入即搜；↑↓ 选择，Enter 打开�
 ./scripts/self-test.sh          # 自动构建后跑全部 15 项
 ./scripts/self-test.sh -s       # 跳过构建，直接用现有 build/
 ```
+TUI 自动化自测（tmux 伪终端注入按键并断言画面；需装 tmux）：
+```bash
+./scripts/self-test-tui.sh      # 输入即搜 / 通配符 / F5 重建 / Esc 清空 / Ctrl+Q 退出
+```
 
 ## 配置（简单纯文本，首次运行自动生成）
 ```ini
