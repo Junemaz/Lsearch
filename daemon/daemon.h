@@ -11,6 +11,8 @@
 #include <mutex>
 #include <shared_mutex>
 #include <string>
+#include <thread>
+#include <vector>
 
 namespace lsearch {
 
@@ -53,8 +55,13 @@ class Daemon {
 
   std::atomic<bool> running_{true};
   std::atomic<int64_t> startedAt_{0};
+  std::atomic<bool> rebuilding_{false};
   std::mutex rebuildM_;
-  bool rebuilding_ = false;
+
+  // 活动连接跟踪（确保 shutdown 时不产生悬空引用 / 不泄漏线程）
+  std::mutex connM_;
+  std::vector<int> connFds_;
+  std::vector<std::thread> connThreads_;
 };
 
 }  // namespace lsearch

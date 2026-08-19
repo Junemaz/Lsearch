@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 
@@ -108,6 +109,9 @@ int main(int argc, char** argv) {
       return 0;
     }
   }
+
+  // 无运行实例时：--rebuild 需在启动/fork 前强制全量重建（Daemon::init 读取该环境变量）
+  if (rebuild) setenv("LSEARCH_FORCE_RESCAN", "1", 1);
 
   // 守护化（非前台）
   if (!foreground) {

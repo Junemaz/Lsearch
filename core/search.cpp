@@ -139,7 +139,8 @@ void Index::search(const std::string& query, SortKey sort, size_t limit,
     local.reserve(256);
     for (size_t i = begin; i < end; ++i) {
       uint64_t c = count.load(std::memory_order_relaxed);
-      if (c >= limit && limit < kCandidateCap) break;
+      if (c >= kCandidateCap) break;                       // 兜底：避免病态查询拖垮
+      if (limit != 0 && limit < kCandidateCap && c >= limit) break;
       const Entry& en = entries_[i];
       if ((dirs_only && !en.e.is_dir) || (files_only && en.e.is_dir)) continue;
       bool pm = false;

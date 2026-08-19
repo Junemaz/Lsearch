@@ -242,6 +242,10 @@ void Daemon::serveConnection(int fd) {
     }
   }
 done:
+  {
+    std::lock_guard<std::mutex> lk(connM_);
+    connFds_.erase(std::remove(connFds_.begin(), connFds_.end(), fd), connFds_.end());
+  }
   ::shutdown(fd, SHUT_RDWR);
   ::close(fd);
 }
@@ -289,8 +293,24 @@ bool Daemon::run(std::string& err) {
     if (r == 0) continue;
     int c = accept(listenFd_, nullptr, nullptr);
     if (c < 0) continue;
-    std::thread([this, c] { serveConnection(c); }).detach();
+    {
+      std::lock_guard<std::mutex> lk(connM_);
+      connFds_.push_back(c);
+    }
+    connThreads_.emplace_back([this, c] { serveConnection(c); });
   }
+
+  // 关闭 accept 后：唤醒所有仍阻塞在 recv 的连接线程并回收，避免悬空引用
+  {
+    std::vector<int> toWake;
+    {
+      std::lock_guard<std::mutex> lk(connM_);
+      toWake = connFds_;
+    }
+    for (int fd : toWake) ::shutdown(fd, SHUT_RDWR);  // recv 返回 0 -> 线程退出
+  }
+  for (auto& t : connThreads_)
+    if (t.joinable()) t.join();
 
   watcher_.stop();
   ::unlink(sock.c_str());

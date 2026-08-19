@@ -143,6 +143,5 @@ int main(int argc, char** argv) {
       printf("%s%c", r.entry.path.c_str(), sep);
     }
   }
-  if (print0) printf("\n");
   return 0;
 }
