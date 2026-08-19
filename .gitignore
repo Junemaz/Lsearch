@@ -5,6 +5,7 @@ cmake-build-*/
 
 # 测试/打包临时产物
 .t/
+.selftest/
 packaging/stage/
 packaging/stage-rpm/
 packaging/rpmbuild/

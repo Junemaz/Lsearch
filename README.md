@@ -41,6 +41,13 @@ lsearch --stats                  # 索引统计
 lsearch-tui                      # 输入即搜；↑↓ 选择，Enter 打开，F5 重建，Esc 清空，Ctrl+Q 退出
 ```
 
+## 自测
+一键自测核心流程（含建索引 / 搜索 / inotify 增量 / 停机补齐 / 关闭）：
+```bash
+./scripts/self-test.sh          # 自动构建后跑全部 15 项
+./scripts/self-test.sh -s       # 跳过构建，直接用现有 build/
+```
+
 ## 配置（简单纯文本，首次运行自动生成）
 ```ini
 # ~/.config/lsearch/lsearch.conf
