@@ -1,0 +1,31 @@
+# Build artifacts
+build/
+build-pkg/
+cmake-build-*/
+
+# 测试/打包临时产物
+.t/
+packaging/stage/
+packaging/stage-rpm/
+packaging/rpmbuild/
+packaging/*.deb
+packaging/*.rpm
+
+# CodeGraph semantic index (local, machine-specific)
+.codegraph/
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+*~
+
+# Runtime data (should never be committed)
+*.db
+*.db-*
+*.log
+
+# Packaging staging
+packaging/stage/
+packaging/*.deb
+packaging/*.rpm

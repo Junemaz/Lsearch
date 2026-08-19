@@ -1,0 +1,12 @@
+# Lsearch 索引根路径，逗号分隔；默认仅用户家目录
+paths = /home/code
+# paths = /home/code,/data,/mnt
+
+# 排除的路径前缀（命中即跳过，含其下所有内容）
+excludes = /proc,/sys,/dev,/run,/snap,/home/code/.cache
+
+# 是否索引以 . 开头的隐藏文件/目录（0/1，默认 0）
+index_hidden = 0
+
+# 是否跟随符号链接（0/1，默认 0）
+follow_symlinks = 0
