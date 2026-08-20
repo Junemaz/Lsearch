@@ -41,6 +41,8 @@ lsearch --stats                  # 索引统计
 lsearch-tui                      # 输入即搜；↑↓ 选择，Enter 打开，F5 重建，Esc 清空，Ctrl+Q 退出
 ```
 
+> TUI 的完整操作与排障见 [docs/tui-manual.md](docs/tui-manual.md)。
+
 ## 自测
 一键自测核心流程（含建索引 / 搜索 / inotify 增量 / 停机补齐 / 关闭）：
 ```bash
