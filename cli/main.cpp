@@ -137,8 +137,8 @@ int main(int argc, char** argv) {
   const char sep = print0 ? '\0' : '\n';
   for (const auto& r : out) {
     if (details) {
-      printf("%s\t%c\t%s\t%s%c", r.entry.path.c_str(), r.entry.is_dir ? 'D' : 'F',
-             humanSize(r.entry.size).c_str(), isoTime(r.entry.mtime).c_str(), '\n');
+      printf("%s\t%s\t%s\t%s\n", r.entry.path.c_str(), r.entry.is_dir ? "目录" : "文件",
+             humanSize(r.entry.size).c_str(), isoTime(r.entry.mtime).c_str());
     } else {
       printf("%s%c", r.entry.path.c_str(), sep);
     }

@@ -121,7 +121,7 @@ void worker() {
           else if (k == "dirs") dirs = v;
           else if (k == "size") size = humanSize(atoll(v.c_str()));
         }
-        setStatus("索引 files=" + files + " dirs=" + dirs + " size=" + size);
+        setStatus("索引：" + files + " 个文件 · " + dirs + " 个目录 · 共 " + size);
       }
     }
 
@@ -230,9 +230,9 @@ int main() {
         const SearchResult& res = g_results[static_cast<size_t>(idx)];
         if (idx == g_cursor) attron(A_REVERSE);
         if (res.entry.is_dir) attron(COLOR_PAIR(3));
-        printw("%s ", res.entry.is_dir ? "D " : "  ");
-        printHighlight(res.entry.name, qlow);
+        printw("%s ", res.entry.is_dir ? "[目录]" : "[文件]");
         attroff(COLOR_PAIR(3));
+        printHighlight(res.entry.name, qlow);
         int used = getcurx(stdscr);
         if (used + 3 < w) {
           move(1 + r, used + 1);

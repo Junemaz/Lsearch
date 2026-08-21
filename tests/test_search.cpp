@@ -51,9 +51,26 @@ TEST(search_dirs_only) {
   idx.build(sample());
   std::vector<SearchResult> out;
   bool tr;
-  idx.search("b", SortKey::Name, 0, true, false, out, tr);
-  if (!out.empty())
-    for (auto& r : out) CHECK(r.entry.is_dir);
+  // 名字含 report 的目录：/b/reports
+  idx.search("report", SortKey::Name, 0, true, false, out, tr);
+  CHECK_EQ(out.size(), (size_t)1);
+  CHECK(out[0].entry.is_dir);
+  CHECK_EQ(out[0].entry.path, "/b/reports");
+}
+
+TEST(search_name_only_not_path) {
+  // 回归：路径含 code、但文件名不含 code 的条目，搜索 code 不应命中
+  std::vector<FileEntry> v;
+  v.push_back({"/home/code/DeepSeek/main.cpp", "main.cpp", 1, 1, false, 1});
+  v.push_back({"/home/code/Project/codebook.txt", "codebook.txt", 1, 1, false, 2});
+  Index idx;
+  idx.build(std::move(v));
+  std::vector<SearchResult> out;
+  bool tr;
+  idx.search("code", SortKey::Name, 0, false, false, out, tr);
+  CHECK_EQ(out.size(), (size_t)1);
+  CHECK_EQ(out[0].entry.path, "/home/code/Project/codebook.txt");
+  CHECK(out[0].entry.name == "codebook.txt");
 }
 
 TEST(search_empty_query) {

@@ -143,18 +143,15 @@ void Index::search(const std::string& query, SortKey sort, size_t limit,
       if (limit != 0 && limit < kCandidateCap && c >= limit) break;
       const Entry& en = entries_[i];
       if ((dirs_only && !en.e.is_dir) || (files_only && en.e.is_dir)) continue;
-      bool pm = false;
-      if (hasWildcard) {
-        if (globMatch(q, en.name_low)) pm = false;
-        else if (globMatch(q, en.path_low)) pm = true;
-        else continue;
-      } else {
-        if (en.name_low.find(q) != std::string::npos) pm = false;
-        else if (en.path_low.find(q) != std::string::npos) pm = true;
-        else continue;
-      }
+      // 语义：仅按最终文件/文件夹名（basename）匹配，不匹配完整路径
+      bool hit;
+      if (hasWildcard)
+        hit = globMatch(q, en.name_low);
+      else
+        hit = en.name_low.find(q) != std::string::npos;
+      if (!hit) continue;
       count.fetch_add(1, std::memory_order_relaxed);
-      local.push_back({en.e, pm});
+      local.push_back({en.e, false});
     }
   };
 

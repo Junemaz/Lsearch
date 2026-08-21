@@ -43,8 +43,8 @@ if "$L" -m report 2>/dev/null | grep -q "AnnualReport.txt"; then ok "子串搜�
 if "$L" -m '*.jpg' 2>/dev/null | grep -q "vacation_photo.jpg"; then ok "通配符 '*.jpg' → vacation_photo.jpg"; else bad "通配符"; fi
 [ "$("$L" -m --count report 2>/dev/null)" = "1" ] && ok "计数 'report' = 1" || bad "计数 report"
 [ "$("$L" -m --count 'vacation' 2>/dev/null)" = "1" ] && ok "计数 'vacation' = 1" || bad "计数 vacation"
-if "$L" -m -d -S deeper 2>/dev/null | head -1 | grep -q "	D	"; then ok "仅目录 -d 'deeper' → 目录类型 D"; else bad "仅目录过滤"; fi
-if "$L" -m --sort size -S deeper 2>/dev/null | head -1 | grep -q "	D	"; then ok "按大小排序首行=目录"; else bad "按大小排序"; fi
+if "$L" -m -d -S deeper 2>/dev/null | head -1 | grep -q "	目录"; then ok "仅目录 -d 'deeper' → 类型列=目录"; else bad "仅目录过滤"; fi
+if "$L" -m --sort size -S deeper 2>/dev/null | head -1 | grep -q "	目录"; then ok "按大小排序首行=目录"; else bad "按大小排序"; fi
 "$L" -m __nonexistent_xyz__ >/dev/null 2>&1
 [ $? -eq 1 ] && ok "无命中退出码 = 1（脚本友好）" || bad "无命中退出码"
 

@@ -79,7 +79,7 @@ lsearchd 守护进程 ── Unix socket IPC ──┬─ GUI（Qt5，规划中�
 - 守护进程离线期间的改动不自动追平（默认幂等：重启加载 SQLite，可 F5 重建）
 - inotify 有 watch 上限：目录极多时需调高
   `/proc/sys/fs/inotify/max_user_watches`，否则仅告警不阻塞
-- 匹配为"文件名或完整路径"的子串/通配符；全文内容搜索不在范围（与 Everything 一致）
+- 匹配仅针对**最终文件/文件夹名（basename）**做子串/通配符（完整路径不参与命中）；全文内容搜索不在范围
 - TUI 需在真实终端（SSH/本地控制台）运行
 
 ## 路线图
