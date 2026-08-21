@@ -56,6 +56,16 @@ bool Daemon::doFullScan() {
             static_cast<unsigned long long>(s.dirs.load()),
             static_cast<unsigned long long>(s.errors.load()));
   });
+
+  // 防御：根路径非空却扫到 0 条，视为异常，绝不能拿空索引覆盖现有好数据
+  bool rootsEmpty = true;
+  for (const auto& r : cfg_.paths)
+    if (!cfg_.isExcluded(r)) { rootsEmpty = false; break; }
+  if (!rootsEmpty && entries.empty()) {
+    fprintf(stderr, "[lsearchd] 全量扫描返回 0 条（根路径非空）—— 保留现有索引，跳过本次覆盖\n");
+    return false;
+  }
+
   db_.clearFiles();
   db_.begin();
   for (auto& e : entries) db_.upsert(e);

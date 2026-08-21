@@ -110,6 +110,18 @@ void fullScan(const Config& cfg, std::vector<FileEntry>& out, ScanProgress prog)
     (void)tid;
   };
 
+  // 先把根路径全部入队，再启动 worker —— 顺序必须如此！否则 worker 可能先看到
+  // 空队列+活跃0 而提前退出，导致本轮扫描返回 0 条（间歇性"索引被清空"竞态）。
+  for (const auto& r : cfg.paths) {
+    if (cfg.isExcluded(r)) continue;
+    if (cfg.follow_symlinks) {
+      struct stat st;
+      if (stat(r.c_str(), &st) == 0)
+        visitedDirs.insert(std::make_pair(st.st_dev, st.st_ino));
+    }
+    push(r);
+  }
+
   std::vector<std::thread> workers;
   workers.reserve(nthreads);
   for (unsigned t = 0; t < nthreads; ++t) {
@@ -121,17 +133,6 @@ void fullScan(const Config& cfg, std::vector<FileEntry>& out, ScanProgress prog)
         doneDir();
       }
     });
-  }
-
-  // 启动根路径
-  for (const auto& r : cfg.paths) {
-    if (cfg.isExcluded(r)) continue;
-    if (cfg.follow_symlinks) {
-      struct stat st;
-      if (stat(r.c_str(), &st) == 0)
-        visitedDirs.insert(std::make_pair(st.st_dev, st.st_ino));
-    }
-    push(r);
   }
 
   // 进度回调线程（约每秒一次）
