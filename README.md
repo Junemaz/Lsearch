@@ -38,7 +38,7 @@ lsearch -s size -S 'log'         # 按大小排序，带详情列
 lsearch --stats                  # 索引统计
 
 # 3) 交互界面
-lsearch-tui                      # 输入即搜；↑↓ 选择，Enter 打开，F5 重建，Esc 清空，Ctrl+Q 退出
+lsearch-tui                      # 输入即搜；↑↓ 选择，Enter 打开，F5 重建，F6 排序，F7 反序，Esc 清空，Ctrl+Q 退出
 ```
 
 > TUI 的完整操作与排障见 [docs/tui-manual.md](docs/tui-manual.md)。

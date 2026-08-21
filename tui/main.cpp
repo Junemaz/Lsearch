@@ -13,6 +13,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <clocale>
@@ -39,8 +40,48 @@ std::atomic<size_t> g_total{0};
 int g_cursor = 0;  // 选中行
 int g_scroll = 0;  // 滚动偏移
 
+// 排序状态（主线程改，搜索线程读；F6 切排序键，F7 反转方向）
+std::mutex g_smut;
+SortKey g_sort = SortKey::Name;
+bool g_reverse = false;
+
 std::string g_status;
 std::mutex g_statusM;
+
+// 排序键显示名与默认方向箭头（引擎默认：Name/Path 升序，Size/Mtime 降序）
+const char* sortLabel(SortKey k) {
+  switch (k) {
+    case SortKey::Name: return "名称";
+    case SortKey::Path: return "路径";
+    case SortKey::Size: return "大小";
+    case SortKey::Mtime: return "时间";
+  }
+  return "?";
+}
+SortKey nextSort(SortKey k) {
+  switch (k) {
+    case SortKey::Name: return SortKey::Size;
+    case SortKey::Size: return SortKey::Mtime;
+    case SortKey::Mtime: return SortKey::Path;
+    case SortKey::Path: return SortKey::Name;
+  }
+  return SortKey::Name;
+}
+std::string sortDesc(SortKey k, bool reverse) {
+  bool isName = (k == SortKey::Name || k == SortKey::Path);
+  const char* arrow = (isName ? (reverse ? "↓" : "↑") : (reverse ? "↑" : "↓"));
+  return std::string(sortLabel(k)) + arrow;
+}
+
+// 短时间格式：MM-DD HH:MM
+std::string shortTime(int64_t t) {
+  time_t tt = static_cast<time_t>(t);
+  struct tm tmv;
+  localtime_r(&tt, &tmv);
+  char buf[16];
+  strftime(buf, sizeof(buf), "%y-%m-%d %H:%M", &tmv);
+  return buf;
+}
 
 std::string wideToUtf8(wint_t wc) {
   std::string out;
@@ -141,7 +182,11 @@ void worker() {
 
     std::vector<SearchResult> res;
     size_t total = 0;
-    if (c.search(q, SortKey::Name, 2000, false, false, res, &total, err)) {
+    SortKey sort;
+    bool reverse;
+    { std::lock_guard<std::mutex> lk(g_smut); sort = g_sort; reverse = g_reverse; }
+    if (c.search(q, sort, 2000, false, false, res, &total, err)) {
+      if (reverse) std::reverse(res.begin(), res.end());
       std::lock_guard<std::mutex> lk(g_rmut);
       g_results.swap(res);
       g_total = total;
@@ -233,13 +278,33 @@ int main() {
         printw("%s ", res.entry.is_dir ? "[目录]" : "[文件]");
         attroff(COLOR_PAIR(3));
         printHighlight(res.entry.name, qlow);
+        // 右侧列：大小(8) + 时间(14)，右对齐
+        const int timeW = 14;
+        const int sizeW = 8;
+        const int timeStart = w - timeW;
+        const int sizeStart = timeStart - 1 - sizeW;
+        // 中间：灰色路径，截断以留出右侧列
         int used = getcurx(stdscr);
-        if (used + 3 < w) {
+        int maxPath = sizeStart - used - 2;
+        if (maxPath > 0) {
+          std::string p = res.entry.path;
+          if (static_cast<int>(p.size()) > maxPath)
+            p = "…" + p.substr(p.size() - (maxPath - 1));
           move(1 + r, used + 1);
           attron(A_DIM);
-          printw("(%s)", res.entry.path.c_str());
+          printw("%s", p.c_str());
           attroff(A_DIM);
         }
+        // 大小
+        std::string sz = res.entry.is_dir ? "-" : humanSize(res.entry.size);
+        if ((int)sz.size() > sizeW) sz = sz.substr(sz.size() - sizeW);
+        move(1 + r, sizeStart);
+        printw("%*s", sizeW, sz.c_str());
+        // 时间
+        std::string tm = shortTime(res.entry.mtime);
+        if ((int)tm.size() > timeW) tm = tm.substr(tm.size() - timeW);
+        move(1 + r, timeStart);
+        printw("%*s", timeW, tm.c_str());
         if (idx == g_cursor) attroff(A_REVERSE);
       }
     }
@@ -249,9 +314,14 @@ int main() {
     clrtoeol();
     attron(COLOR_PAIR(1));
     {
+      std::string srt;
+      {
+        std::lock_guard<std::mutex> lk(g_smut);
+        srt = sortDesc(g_sort, g_reverse);
+      }
       std::lock_guard<std::mutex> lk(g_statusM);
-      printw("%s | 匹配 %zu%s | Enter 打开  F5 重建  Esc 清空  Ctrl+Q 退出",
-             g_status.c_str(), g_total.load(), (g_total.load() > 2000 ? "+" : ""));
+      printw("%s | 匹配 %zu%s | 排序:%s | F5重建 F6排序 F7反序 Esc清空 回车打开 Ctrl+Q退出",
+             g_status.c_str(), g_total.load(), (g_total.load() > 2000 ? "+" : ""), srt.c_str());
     }
     attroff(COLOR_PAIR(1));
     refresh();
@@ -302,6 +372,18 @@ int main() {
     } else if (k == KEY_F(5)) {
       triggerRebuild();
       setStatus("已触发重建…");
+    } else if (k == KEY_F(6)) {  // 切换排序键：名称→大小→时间→路径
+      {
+        std::lock_guard<std::mutex> lk(g_smut);
+        g_sort = nextSort(g_sort);
+      }
+      g_needSearch = true;
+    } else if (k == KEY_F(7)) {  // 反序
+      {
+        std::lock_guard<std::mutex> lk(g_smut);
+        g_reverse = !g_reverse;
+      }
+      g_needSearch = true;
     } else if (k == '\n' || k == KEY_ENTER) {
       openSelected();
     } else if (k == 27) {  // Esc：清空
