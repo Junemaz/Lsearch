@@ -22,7 +22,9 @@
 #include <QGroupBox>
 #include <QHeaderView>
 #include <QHBoxLayout>
+#include <QHideEvent>
 #include <QIcon>
+#include <QKeyEvent>
 #include <QKeySequence>
 #include <QLabel>
 #include <QLineEdit>
@@ -167,14 +169,21 @@ void applyModernTheme(QApplication& app) {
     QToolButton:checked, QToolButton:pressed { background: #dbeafe; color: #1f2430; }
     QToolBar::separator { background: #e3e6ec; width: 1px; margin: 4px 6px; }
     QStatusBar { background: #f1f3f6; color: #6b7686; }
-    QMenu {
-      background: #ffffff; color: #1f2430;
-      border: 1px solid #d3d9e0; border-radius: 6px; padding: 4px;
-    }
+    QMenu { background: #ffffff; color: #1f2430;
+      border: 1px solid #d3d9e0; border-radius: 6px; padding: 4px; }
     QMenu::item { padding: 6px 20px; border-radius: 4px; }
     QMenu::item:selected { background: #dbeafe; color: #1f2430; }
     QMenu::item:disabled { color: #a8b0bc; }
     QMenu::separator { background: #e3e6ec; height: 1px; margin: 4px 8px; }
+    #dropdown { background: #ffffff; border: 1px solid #d3d9e0; border-radius: 6px; }
+    #menuItem {
+      background: transparent; color: #1f2430;
+      border: none; border-radius: 4px; text-align: left;
+      padding: 6px 18px;
+    }
+    #menuItem:hover { background: #dbeafe; color: #1f2430; }
+    #menuItem:disabled { color: #a8b0bc; }
+    #menuSep { background: #e3e6ec; height: 1px; border: none; margin: 3px 8px; }
     QToolTip { background: #ffffff; color: #1f2430; border: 1px solid #d3d9e0; }
     QLabel { color: #1f2430; }
     QGroupBox {
@@ -425,12 +434,79 @@ class IndexManageDialog : public QDialog {
   QPoint dragOffset_;
 };
 
+// 自定义下拉面板：完全不用 QMenu 弹窗机制（那套在部分合成器上会残留双菜单）。
+// 一个普通 QWidget(Qt::Popup)，自己管理显隐；切换 = 同一窗口换内容+挪位置，
+// 物理上不存在“第二个弹窗”，也就谈不上叠加/残影。
+class Dropdown : public QWidget {
+  Q_OBJECT
+ public:
+  explicit Dropdown(QWidget* parent = nullptr) : QWidget(parent, Qt::Popup) {
+    setObjectName("dropdown");
+    setAttribute(Qt::WA_StyledBackground, true);
+    lay_ = new QVBoxLayout(this);
+    lay_->setContentsMargins(4, 4, 4, 4);
+    lay_->setSpacing(1);
+  }
+
+  // 用一个锚点按钮 + 模板菜单(含分隔符/禁用项)填充并显示；若已显示则原地换内容
+  void showFor(QToolButton* anchor, QMenu* model) {
+    qDeleteAll(rows_);
+    rows_.clear();
+    for (QAction* a : model->actions()) {
+      if (a->isSeparator()) {
+        auto* sep = new QFrame(this);
+        sep->setObjectName("menuSep");
+        sep->setFrameShape(QFrame::HLine);
+        lay_->addWidget(sep);
+        rows_.append(sep);
+      } else {
+        auto* b = new QToolButton(this);
+        b->setObjectName("menuItem");
+        b->setText(a->text());
+        b->setEnabled(a->isEnabled());
+        b->setToolTip(a->toolTip());
+        b->setCursor(Qt::PointingHandCursor);
+        connect(b, &QToolButton::clicked, this, [this, a] {
+          hide();  // 先收面板，再触发动作（动作可能弹模态框）
+          a->trigger();
+        });
+        lay_->addWidget(b);
+        rows_.append(b);
+      }
+    }
+    adjustSize();
+    move(anchor->mapToGlobal(QPoint(0, anchor->height() + 2)));
+    show();
+    raise();
+    activateWindow();
+  }
+
+ protected:
+  // 面板外点击 -> 收起（配合 MainWindow 的状态复位）
+  void mousePressEvent(QMouseEvent* e) override {
+    if (!rect().contains(e->pos())) hide();
+    QWidget::mousePressEvent(e);
+  }
+  void keyPressEvent(QKeyEvent* e) override {
+    if (e->key() == Qt::Key_Escape) hide();
+    QWidget::keyPressEvent(e);
+  }
+  void hideEvent(QHideEvent*) override { emit hidden(); }
+
+ signals:
+  void hidden();
+
+ private:
+  QVBoxLayout* lay_;
+  QList<QWidget*> rows_;
+};
+
 class MainWindow : public QMainWindow {
   Q_OBJECT
 
  public:
   MainWindow() {
-    setWindowTitle("Lsearch");
+    setWindowTitle("Lsearch [gui-panel]");  // ASCII 构建标记：便于确认当前运行版本
     setWindowIcon(makeAppIcon());
     // 无系统边框：白框/系统标题栏一去不返，全部自绘
     setWindowFlags(Qt::Window | Qt::FramelessWindowHint);
@@ -501,22 +577,16 @@ class MainWindow : public QMainWindow {
     return -1;
   }
 
-  // 打开第 i 个菜单：单例弹窗 menu_ 复用——先清空、装上第 i 组的菜单项，再弹出。
-  // 全程序只有这一扇弹窗，从结构上杜绝“两个菜单同时显示”。
+  // 打开第 i 个菜单：单例下拉面板复用——同一窗口换内容/位置，物理上无第二个弹窗
   void openMenuAt(int i) {
     if (i < 0 || i >= static_cast<int>(menuBtns_.size())) return;
-    if (activeMenu_ == i && menu_->isVisible()) return;
-    menu_->hide();
-    QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);  // 提交 hide
-    menu_->clear();
-    menu_->addActions(menuModels_[i]->actions());
+    if (activeMenu_ == i && dropdown_->isVisible()) return;
+    dropdown_->showFor(menuBtns_[i], menuModels_[i]);
     activeMenu_ = i;
-    QToolButton* b = menuBtns_[i];
-    menu_->popup(b->mapToGlobal(QPoint(0, b->height() + 2)));
   }
 
   void closeAllMenus() {
-    menu_->hide();
+    dropdown_->hide();
     activeMenu_ = -1;
   }
 
@@ -641,11 +711,11 @@ class MainWindow : public QMainWindow {
     tl->addWidget(closeBtn_);
 
     // ---- 自绘菜单行 ----
-    // 单例弹窗 menu_：全程序只有这一扇菜单窗口；三个标题的菜单项分别存在
-    // 三个“模板” QMenu（从不弹出），打开时把对应模板的条目填进 menu_ 再弹出。
-    // 这样物理上不可能出现两个菜单同时显示。
-    menu_ = new QMenu(this);
-    connect(menu_, &QMenu::aboutToHide, this, [this] { activeMenu_ = -1; });
+    // 单例下拉面板 dropdown_：全程序只有这一扇“菜单窗口”，三个标题的条目
+    // 存在三个模板 QMenu（从不显示），打开时把对应模板填进面板并挪到按钮下。
+    // 结构上不可能出现两个菜单。
+    dropdown_ = new Dropdown(this);
+    connect(dropdown_, &Dropdown::hidden, this, [this] { activeMenu_ = -1; });
 
     menuRow_ = new QWidget(this);
     auto* mr = new QHBoxLayout(menuRow_);
@@ -716,6 +786,10 @@ class MainWindow : public QMainWindow {
 
     menuRow_->installEventFilter(this);
     for (QToolButton* b : menuBtns_) b->installEventFilter(this);
+
+    // 注册菜单动作的快捷键到主窗口（否则藏在模板菜单里的快捷键不生效）
+    for (QMenu* m : menuModels_)
+      for (QAction* a : m->actions()) addAction(a);
 
     headerCont_ = new QWidget(this);
     headerCont_->setObjectName("titleBar");
@@ -1006,8 +1080,8 @@ class MainWindow : public QMainWindow {
   std::vector<QToolButton*> menuBtns_;
   int activeMenu_ = -1;
   QTimer* menuWatchTimer_ = nullptr;
-  // 单例菜单弹窗 + 三个“模板”菜单（只存菜单项，从不直接弹出）
-  QMenu* menu_ = nullptr;
+  // 单例下拉面板 + 三个“模板”菜单（只存菜单项，从不弹出/显示）
+  Dropdown* dropdown_ = nullptr;
   std::vector<QMenu*> menuModels_;
   QToolButton* minBtn_ = nullptr;
   QToolButton* closeBtn_ = nullptr;
