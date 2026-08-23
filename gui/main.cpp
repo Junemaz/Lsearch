@@ -41,6 +41,7 @@
 #include <QProcess>
 #include <QPushButton>
 #include <QStatusBar>
+#include <QStyle>
 #include <QSystemTrayIcon>
 #include <QTableWidget>
 #include <QTimer>
@@ -138,8 +139,9 @@ void applyModernTheme(QApplication& app) {
       background: transparent; color: #333c4e;
       border: none; border-radius: 4px; padding: 4px 10px;
     }
-    #menuBtn:hover { background: #eef1f5; color: #1f2430; }
+    #menuBtn:hover, #menuBtn[hover="true"] { background: #eef1f5; color: #1f2430; }
     #menuBtn:pressed { background: #e2e9f3; }
+    #menuBtn[active="true"] { background: #dbeafe; color: #1f2430; }
     QLineEdit {
       background: #ffffff; color: #1f2430;
       border: 1px solid #d3d9e0; border-radius: 8px;
@@ -450,6 +452,8 @@ class Dropdown : public QWidget {
 
   // 用一个锚点按钮 + 模板菜单(含分隔符/禁用项)填充并显示；若已显示则原地换内容
   void showFor(QToolButton* anchor, QMenu* model) {
+    // 抑制中间帧：重建+挪位期间不重绘，避免残影
+    setUpdatesEnabled(false);
     qDeleteAll(rows_);
     rows_.clear();
     for (QAction* a : model->actions()) {
@@ -476,9 +480,11 @@ class Dropdown : public QWidget {
     }
     adjustSize();
     move(anchor->mapToGlobal(QPoint(0, anchor->height() + 2)));
-    show();
+    if (!isVisible()) show();  // 已显示则仅挪位置，不重新映射窗口
+    setUpdatesEnabled(true);
     raise();
     activateWindow();
+    update();
   }
 
  protected:
@@ -535,17 +541,25 @@ class MainWindow : public QMainWindow {
 
   // 无边框窗口：拖拽/缩放统一入口（过滤标题栏与主要子控件）
   bool eventFilter(QObject* obj, QEvent* ev) override {
-    // 菜单：**点击才打开**（不悬停误弹）；菜单打开后的“飘过去切换”由
-    // watchMenus 全局光标轮询完成（绕过弹窗抓取吞事件的问题）
-    if (ev->type() == QEvent::MouseButtonPress && isMenuButton(obj)) {
-      openMenuAt(menuButtonIndex(obj));
-      return true;
+    // 菜单按钮：**点击才打开**（不悬停误弹）；菜单打开后的“飘过去切换/高亮
+    // 跟随”由 watchMenus 全局光标轮询完成（弹窗抓取会吞掉按钮悬停事件，
+    // 所以高亮不依赖 Qt 的 hover，全由我们手动驱动）
+    if (isMenuButton(obj)) {
+      if (ev->type() == QEvent::MouseButtonPress) {
+        openMenuAt(menuButtonIndex(obj));
+        refreshButtonStates();
+        return true;
+      }
+      if (ev->type() == QEvent::Enter || ev->type() == QEvent::Leave) {
+        refreshButtonStates();  // 无菜单打开时的悬停高亮/离开熄灭
+        return false;
+      }
     }
-    // 点击其它地方（搜索框/表格/空白）收摊：QMenu 弹窗自带抓取，外部点击
-    // 会自动收起菜单并重放事件；这里顺带确保状态复位
+    // 点击其它地方（搜索框/表格/空白）收摊并复位高亮
     if (ev->type() == QEvent::MouseButtonPress && activeMenu_ >= 0 &&
         !isMenuButton(obj)) {
       closeAllMenus();
+      refreshButtonStates();
     }
     if (ev->type() == QEvent::MouseButtonPress || ev->type() == QEvent::MouseMove ||
         ev->type() == QEvent::MouseButtonRelease || ev->type() == QEvent::MouseButtonDblClick) {
@@ -557,15 +571,43 @@ class MainWindow : public QMainWindow {
   }
 
   // 菜单打开期间：全局光标轮询（60ms）——光标飘到别的标题上立即切换，
-  // 飘到别处则保持（外部点击/Esc 由 QMenu 自动收起）
+  // 并在每个 tick 刷新按钮高亮（弹窗抓取吞了鼠标事件，高亮必须我们自己刷）
   void watchMenus() {
-    if (activeMenu_ < 0) return;
+    if (activeMenu_ < 0) {
+      refreshButtonStates();
+      return;
+    }
     const QPoint g = QCursor::pos();
     for (size_t i = 0; i < menuBtns_.size(); ++i) {
       QRect r(menuBtns_[i]->mapToGlobal(QPoint(0, 0)), menuBtns_[i]->size());
       if (r.contains(g)) {
         if (activeMenu_ != static_cast<int>(i)) openMenuAt(static_cast<int>(i));
+        refreshButtonStates();
         return;
+      }
+    }
+    refreshButtonStates();
+  }
+
+  // 手动驱动菜单按钮高亮：
+  //   active = 当前打开的菜单；hover = 鼠标正悬停的按钮（即使菜单弹窗抓取了鼠标）
+  // 关闭 hover 事件依赖，保证高亮始终跟随光标、旧高亮必被清掉
+  void refreshButtonStates() {
+    QPoint g = QCursor::pos();
+    int over = -1;
+    for (size_t i = 0; i < menuBtns_.size(); ++i) {
+      QRect r(menuBtns_[i]->mapToGlobal(QPoint(0, 0)), menuBtns_[i]->size());
+      if (r.contains(g)) { over = static_cast<int>(i); break; }
+    }
+    for (size_t i = 0; i < menuBtns_.size(); ++i) {
+      QToolButton* b = menuBtns_[i];
+      const bool act = (activeMenu_ == static_cast<int>(i));
+      const bool hov = (over == static_cast<int>(i));
+      if (b->property("active").toBool() != act || b->property("hover").toBool() != hov) {
+        b->setProperty("active", act);
+        b->setProperty("hover", hov);
+        b->style()->unpolish(b);
+        b->style()->polish(b);
       }
     }
   }
@@ -715,7 +757,10 @@ class MainWindow : public QMainWindow {
     // 存在三个模板 QMenu（从不显示），打开时把对应模板填进面板并挪到按钮下。
     // 结构上不可能出现两个菜单。
     dropdown_ = new Dropdown(this);
-    connect(dropdown_, &Dropdown::hidden, this, [this] { activeMenu_ = -1; });
+    connect(dropdown_, &Dropdown::hidden, this, [this] {
+      activeMenu_ = -1;
+      refreshButtonStates();
+    });
 
     menuRow_ = new QWidget(this);
     auto* mr = new QHBoxLayout(menuRow_);
