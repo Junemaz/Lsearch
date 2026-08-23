@@ -12,6 +12,7 @@
 #include <QCheckBox>
 #include <QCloseEvent>
 #include <QColor>
+#include <QCursor>
 #include <QDesktopServices>
 #include <QDialog>
 #include <QDir>
@@ -454,6 +455,21 @@ class MainWindow : public QMainWindow {
 
   // 无边框窗口：拖拽/缩放统一入口（过滤标题栏与主要子控件）
   bool eventFilter(QObject* obj, QEvent* ev) override {
+    // 菜单行：悬停即切换、点按也可开、离开自动收起（180ms 容错）
+    if (ev->type() == QEvent::Enter || ev->type() == QEvent::Leave ||
+        (ev->type() == QEvent::MouseButtonPress && isMenuButton(obj))) {
+      int idx = menuButtonIndex(obj);
+      if (ev->type() == QEvent::Enter) {
+        if (idx >= 0) openMenuAt(idx);
+        else if (obj == menuRow_) menuCloseTimer_->start();
+        return false;
+      }
+      if (ev->type() == QEvent::Leave) {
+        menuCloseTimer_->start();
+        return false;
+      }
+      if (idx >= 0) { openMenuAt(idx); return true; }
+    }
     if (ev->type() == QEvent::MouseButtonPress || ev->type() == QEvent::MouseMove ||
         ev->type() == QEvent::MouseButtonRelease || ev->type() == QEvent::MouseButtonDblClick) {
       auto* m = static_cast<QMouseEvent*>(ev);
@@ -461,6 +477,43 @@ class MainWindow : public QMainWindow {
       if (handleTopLevelMouse(static_cast<QWidget*>(obj), m, winPos)) return true;
     }
     return QMainWindow::eventFilter(obj, ev);
+  }
+
+  bool isMenuButton(QObject* o) const { return menuButtonIndex(o) >= 0; }
+  int menuButtonIndex(QObject* o) const {
+    for (size_t i = 0; i < menuBtns_.size(); ++i)
+      if (o == menuBtns_[i]) return static_cast<int>(i);
+    return -1;
+  }
+
+  // 打开第 i 个菜单（先同步关闭其它菜单，杜绝同时两开/闪现叠加）
+  void openMenuAt(int i) {
+    if (i < 0 || i >= static_cast<int>(menuBtns_.size())) return;
+    if (activeMenu_ == i && menuMenus_[i]->isVisible()) {
+      menuCloseTimer_->stop();
+      return;
+    }
+    closeAllMenus();
+    activeMenu_ = i;
+    QToolButton* b = menuBtns_[i];
+    menuMenus_[i]->popup(b->mapToGlobal(QPoint(0, b->height() + 2)));
+    menuCloseTimer_->stop();
+  }
+
+  void closeAllMenus() {
+    for (QMenu* m : menuMenus_) m->hide();
+    activeMenu_ = -1;
+  }
+
+  // 离开菜单区：若光标不在任何打开的菜单内再收起（给移动留余地）
+  void maybeCloseMenus() {
+    if (activeMenu_ < 0) return;
+    QMenu* m = menuMenus_[activeMenu_];
+    if (m->isVisible() && m->geometry().contains(QCursor::pos())) {
+      menuCloseTimer_->start();
+      return;
+    }
+    closeAllMenus();
   }
 
  private slots:
@@ -584,19 +637,28 @@ class MainWindow : public QMainWindow {
     tl->addWidget(closeBtn_);
 
     // ---- 自绘菜单行（点开式菜单按钮：一次只出现一个菜单，杜绝系统菜单栏叠加缺陷）----
-    auto* menuRow = new QWidget(this);
-    auto* mr = new QHBoxLayout(menuRow);
+    menuRow_ = new QWidget(this);
+    auto* mr = new QHBoxLayout(menuRow_);
     mr->setContentsMargins(8, 2, 8, 2);
     mr->setSpacing(2);
+    // 悬停式菜单按钮（不 setMenu/InstantPopup，菜单由 eventFilter 统一管理：
+    // 悬停即切换、点按也可开、同步关闭其它、离开自动收起）
     auto addMenuBtn = [&](const QString& text, QMenu* menu) {
-      auto* b = new QToolButton(menuRow);
+      auto* b = new QToolButton(menuRow_);
       b->setObjectName("menuBtn");
       b->setText(text);
-      b->setPopupMode(QToolButton::InstantPopup);
-      b->setMenu(menu);
       b->setCursor(Qt::PointingHandCursor);
       b->setFocusPolicy(Qt::NoFocus);
+      b->setMouseTracking(true);
       mr->addWidget(b);
+      menuBtns_.push_back(b);
+      menuMenus_.push_back(menu);
+      connect(menu, &QMenu::aboutToHide, this, [this, menu] {
+        // 外部点击/切换导致的隐藏：同步 activeMenu_ 状态
+        int i = 0;
+        for (QMenu* m : menuMenus_) { if (m == menu) break; ++i; }
+        if (i < static_cast<int>(menuMenus_.size()) && activeMenu_ == i) activeMenu_ = -1;
+      });
       return b;
     };
 
@@ -640,6 +702,16 @@ class MainWindow : public QMainWindow {
     });
     addMenuBtn("帮助", helpMenu);
     mr->addStretch(1);
+    menuRow_->setMouseTracking(true);
+
+    // 离开菜单行/按钮后：给 180ms 容错再收起（防止移动时误关）
+    menuCloseTimer_ = new QTimer(this);
+    menuCloseTimer_->setSingleShot(true);
+    menuCloseTimer_->setInterval(180);
+    connect(menuCloseTimer_, &QTimer::timeout, this, [this] { maybeCloseMenus(); });
+
+    menuRow_->installEventFilter(this);
+    for (QToolButton* b : menuBtns_) b->installEventFilter(this);
 
     headerCont_ = new QWidget(this);
     headerCont_->setObjectName("titleBar");
@@ -647,7 +719,7 @@ class MainWindow : public QMainWindow {
     hc->setContentsMargins(0, 0, 0, 0);
     hc->setSpacing(0);
     hc->addWidget(titleBar_);
-    hc->addWidget(menuRow);
+    hc->addWidget(menuRow_);
     setMenuWidget(headerCont_);  // 标题栏 + 菜单行整体位于中央区之上
 
     input_ = new QLineEdit(this);
@@ -926,6 +998,11 @@ class MainWindow : public QMainWindow {
 
   QWidget* titleBar_ = nullptr;
   QWidget* headerCont_ = nullptr;
+  QWidget* menuRow_ = nullptr;
+  std::vector<QToolButton*> menuBtns_;
+  std::vector<QMenu*> menuMenus_;
+  int activeMenu_ = -1;
+  QTimer* menuCloseTimer_ = nullptr;
   QToolButton* minBtn_ = nullptr;
   QToolButton* closeBtn_ = nullptr;
   QLineEdit* input_ = nullptr;
