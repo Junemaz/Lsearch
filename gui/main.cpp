@@ -304,7 +304,12 @@ class IndexManageDialog : public QDialog {
     }
     std::vector<std::pair<std::string, std::string>> kv;
     if (!c.getConfig(kv, err)) {
-      QMessageBox::warning(this, "索引管理", "读取配置失败: " + QString::fromStdString(err));
+      if (err.find("unknown command") != std::string::npos)
+        QMessageBox::warning(this, "索引管理",
+                             "守护进程版本过旧，还不支持「索引管理」。\n"
+                             "请关闭本窗口重新打开（会自动用新版本重启守护进程），再试一次。");
+      else
+        QMessageBox::warning(this, "索引管理", "读取配置失败: " + QString::fromStdString(err));
       return;
     }
     QString paths, excludes, hidden, follow;
@@ -348,7 +353,12 @@ class IndexManageDialog : public QDialog {
     }
     if (!c.setPaths(pathsCsv.toStdString(), err) || !c.setExcludes(exclCsv.toStdString(), err) ||
         !c.setOpts(hiddenChk_->isChecked() ? "1" : "0", followChk_->isChecked() ? "1" : "0", err)) {
-      QMessageBox::warning(this, "索引管理", "保存失败: " + QString::fromStdString(err));
+      if (err.find("unknown command") != std::string::npos)
+        QMessageBox::warning(this, "索引管理",
+                             "守护进程版本过旧，还不支持「索引管理」。\n"
+                             "请关闭本窗口重新打开（会自动用新版本重启守护进程），再试一次。");
+      else
+        QMessageBox::warning(this, "索引管理", "保存失败: " + QString::fromStdString(err));
       return;
     }
     QMessageBox::information(this, "索引管理", "配置已保存，正在后台重建索引…");
@@ -742,7 +752,14 @@ class MainWindow : public QMainWindow {
       if (c.search(q, lsearch::SortKey::Name, kMaxRows, dirs, files, res, &total, err)) {
         fillTable(res, total);
       } else {
-        showStatus("搜索出错: " + QString::fromStdString(err));
+        // 断线/旧守护进程：尝试重连（自动拉起新守护进程），下个查询重试
+        c.close();
+        std::string e2;
+        if (lsearch::Client::connectOrSpawn(lsearch::Config::load("").sock_path, true, c, e2)) {
+          showStatus("守护进程已重连");
+        } else {
+          showStatus("搜索出错: " + QString::fromStdString(err) + "（已断线：" + QString::fromStdString(e2) + "）");
+        }
       }
     }
   }
