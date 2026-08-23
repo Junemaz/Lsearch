@@ -446,15 +446,10 @@ class MainWindow : public QMainWindow {
   }
 
  protected:
+  // 点 ✕ = 真正退出进程（不再隐藏到托盘，避免“窗口没了进程还在”）
   void closeEvent(QCloseEvent* e) override {
-    if (tray_ && !quitting_) {
-      e->ignore();
-      hide();
-      tray_->showMessage("Lsearch", "已最小化到托盘，双击托盘图标可恢复。",
-                         QSystemTrayIcon::Information, 2000);
-    } else {
-      e->accept();
-    }
+    quitApp();
+    e->accept();
   }
 
   // 无边框窗口：拖拽/缩放统一入口（过滤标题栏与主要子控件）
@@ -571,8 +566,17 @@ class MainWindow : public QMainWindow {
     closeBtn_->setObjectName("btnClose");
     closeBtn_->setText("✕");
     closeBtn_->setFixedSize(34, 26);
-    connect(minBtn_, &QToolButton::clicked, this, &MainWindow::showMinimized);
-    connect(closeBtn_, &QToolButton::clicked, this, [this] { close(); });
+    connect(minBtn_, &QToolButton::clicked, this, [this] {
+      // — = 最小化（托盘可用时最小化到托盘，否则普通最小化）
+      if (tray_) {
+        hide();
+        tray_->showMessage("Lsearch", "已最小化到托盘，点击托盘图标可恢复。",
+                           QSystemTrayIcon::Information, 2000);
+      } else {
+        showMinimized();
+      }
+    });
+    connect(closeBtn_, &QToolButton::clicked, this, [this] { quitApp(); });  // ✕ = 退出进程
     tl->addWidget(icon);
     tl->addWidget(title);
     tl->addStretch(1);
@@ -597,9 +601,16 @@ class MainWindow : public QMainWindow {
     };
 
     auto* fileMenu = new QMenu(this);
-    QAction* closeWinAct = fileMenu->addAction("关闭窗口");
-    closeWinAct->setShortcut(QKeySequence("Ctrl+W"));
-    connect(closeWinAct, &QAction::triggered, this, [this] { close(); });  // 走 closeEvent -> 隐藏到托盘
+    QAction* hideAct = fileMenu->addAction("隐藏到托盘");
+    hideAct->setShortcut(QKeySequence("Ctrl+H"));
+    hideAct->setEnabled(QSystemTrayIcon::isSystemTrayAvailable());
+    connect(hideAct, &QAction::triggered, this, [this] {
+      if (tray_) {
+        hide();
+        tray_->showMessage("Lsearch", "已最小化到托盘，点击托盘图标可恢复。",
+                           QSystemTrayIcon::Information, 2000);
+      }
+    });
     fileMenu->addSeparator();
     QAction* quitAct = fileMenu->addAction("退出");
     quitAct->setShortcut(QKeySequence("Ctrl+Q"));
