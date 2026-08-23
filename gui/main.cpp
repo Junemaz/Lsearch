@@ -459,20 +459,11 @@ class MainWindow : public QMainWindow {
 
   // 无边框窗口：拖拽/缩放统一入口（过滤标题栏与主要子控件）
   bool eventFilter(QObject* obj, QEvent* ev) override {
-    // 菜单行：悬停即切换、点按也可开、离开自动收起（180ms 容错）
-    if (ev->type() == QEvent::Enter || ev->type() == QEvent::Leave ||
-        (ev->type() == QEvent::MouseButtonPress && isMenuButton(obj))) {
-      int idx = menuButtonIndex(obj);
-      if (ev->type() == QEvent::Enter) {
-        if (idx >= 0) openMenuAt(idx);
-        else if (obj == menuRow_) menuCloseTimer_->start();
-        return false;
-      }
-      if (ev->type() == QEvent::Leave) {
-        menuCloseTimer_->start();
-        return false;
-      }
-      if (idx >= 0) { openMenuAt(idx); return true; }
+    // 菜单按钮：悬停/点按打开（仅在无菜单打开时可收到这些事件；
+    // 菜单打开后的切换/收起全部走 watchMenus 全局光标轮询，绕过弹窗抓取）
+    if ((ev->type() == QEvent::Enter || ev->type() == QEvent::MouseButtonPress) && isMenuButton(obj)) {
+      openMenuAt(menuButtonIndex(obj));
+      return ev->type() == QEvent::MouseButtonPress;
     }
     if (ev->type() == QEvent::MouseButtonPress || ev->type() == QEvent::MouseMove ||
         ev->type() == QEvent::MouseButtonRelease || ev->type() == QEvent::MouseButtonDblClick) {
@@ -481,6 +472,26 @@ class MainWindow : public QMainWindow {
       if (handleTopLevelMouse(static_cast<QWidget*>(obj), m, winPos)) return true;
     }
     return QMainWindow::eventFilter(obj, ev);
+  }
+
+  // 菜单打开期间（弹窗会抓取鼠标、吞掉按钮的悬停事件）：
+  // 用全局光标位置轮询来实现 切换/收起，60ms 一查，即时跟手
+  void watchMenus() {
+    if (activeMenu_ < 0) return;
+    const QPoint g = QCursor::pos();
+    // 1) 光标落在某个菜单按钮上 -> 切换（或保持）
+    for (size_t i = 0; i < menuBtns_.size(); ++i) {
+      QRect r(menuBtns_[i]->mapToGlobal(QPoint(0, 0)), menuBtns_[i]->size());
+      if (r.contains(g)) {
+        if (activeMenu_ != static_cast<int>(i)) openMenuAt(static_cast<int>(i));
+        return;
+      }
+    }
+    // 2) 光标仍在打开的菜单内 -> 保持
+    QMenu* m = menuMenus_[activeMenu_];
+    if (m->isVisible() && m->geometry().contains(g)) return;
+    // 3) 其它情况 -> 收起
+    closeAllMenus();
   }
 
   bool isMenuButton(QObject* o) const { return menuButtonIndex(o) >= 0; }
@@ -495,7 +506,6 @@ class MainWindow : public QMainWindow {
   void openMenuAt(int i) {
     if (i < 0 || i >= static_cast<int>(menuBtns_.size())) return;
     if (activeMenu_ == i && menuMenus_[i]->isVisible()) {
-      menuCloseTimer_->stop();
       return;
     }
     closeAllMenus();
@@ -503,23 +513,11 @@ class MainWindow : public QMainWindow {
     activeMenu_ = i;
     QToolButton* b = menuBtns_[i];
     menuMenus_[i]->popup(b->mapToGlobal(QPoint(0, b->height() + 2)));
-    menuCloseTimer_->stop();
   }
 
   void closeAllMenus() {
     for (QMenu* m : menuMenus_) m->hide();
     activeMenu_ = -1;
-  }
-
-  // 离开菜单区：若光标不在任何打开的菜单内再收起（给移动留余地）
-  void maybeCloseMenus() {
-    if (activeMenu_ < 0) return;
-    QMenu* m = menuMenus_[activeMenu_];
-    if (m->isVisible() && m->geometry().contains(QCursor::pos())) {
-      menuCloseTimer_->start();
-      return;
-    }
-    closeAllMenus();
   }
 
  private slots:
@@ -710,11 +708,11 @@ class MainWindow : public QMainWindow {
     mr->addStretch(1);
     menuRow_->setMouseTracking(true);
 
-    // 离开菜单行/按钮后：给 180ms 容错再收起（防止移动时误关）
-    menuCloseTimer_ = new QTimer(this);
-    menuCloseTimer_->setSingleShot(true);
-    menuCloseTimer_->setInterval(180);
-    connect(menuCloseTimer_, &QTimer::timeout, this, [this] { maybeCloseMenus(); });
+    // 菜单打开期间用全局光标轮询实现切换/收起（绕过弹窗抓取吞悬停事件的问题）
+    menuWatchTimer_ = new QTimer(this);
+    menuWatchTimer_->setInterval(60);
+    connect(menuWatchTimer_, &QTimer::timeout, this, [this] { watchMenus(); });
+    menuWatchTimer_->start();
 
     menuRow_->installEventFilter(this);
     for (QToolButton* b : menuBtns_) b->installEventFilter(this);
@@ -1008,7 +1006,7 @@ class MainWindow : public QMainWindow {
   std::vector<QToolButton*> menuBtns_;
   std::vector<QMenu*> menuMenus_;
   int activeMenu_ = -1;
-  QTimer* menuCloseTimer_ = nullptr;
+  QTimer* menuWatchTimer_ = nullptr;
   QToolButton* minBtn_ = nullptr;
   QToolButton* closeBtn_ = nullptr;
   QLineEdit* input_ = nullptr;
