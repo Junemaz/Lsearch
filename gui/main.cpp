@@ -88,10 +88,12 @@ QIcon makeAppIcon() {
 
 void applyModernTheme(QApplication& app) {
   app.setStyle("Fusion");
+
+  // ---- 浅色（亮色）主题 ----
   QPalette pal;
-  const QColor window(30, 36, 51), base(15, 18, 25), alt(27, 34, 48);
-  const QColor text(232, 234, 240), faint(154, 167, 189), accent(97, 175, 239);
-  const QColor border(51, 60, 78), toolbg(35, 43, 59);
+  const QColor window(244, 246, 248), base(255, 255, 255), alt(248, 250, 252);
+  const QColor text(31, 36, 48), faint(107, 118, 134), accent(37, 99, 235);
+  const QColor border(211, 217, 224), toolbg(255, 255, 255), sel(219, 234, 254);
   pal.setColor(QPalette::Window, window);
   pal.setColor(QPalette::WindowText, text);
   pal.setColor(QPalette::Base, base);
@@ -101,14 +103,14 @@ void applyModernTheme(QApplication& app) {
   pal.setColor(QPalette::ButtonText, text);
   pal.setColor(QPalette::BrightText, Qt::white);
   pal.setColor(QPalette::Highlight, accent);
-  pal.setColor(QPalette::HighlightedText, QColor(255, 255, 255));
-  pal.setColor(QPalette::ToolTipBase, toolbg);
+  pal.setColor(QPalette::HighlightedText, Qt::white);
+  pal.setColor(QPalette::ToolTipBase, Qt::white);
   pal.setColor(QPalette::ToolTipText, text);
-  pal.setColor(QPalette::Light, border);
-  pal.setColor(QPalette::Midlight, QColor(45, 53, 70));
-  pal.setColor(QPalette::Mid, QColor(40, 48, 63));
-  pal.setColor(QPalette::Dark, QColor(24, 29, 41));
-  pal.setColor(QPalette::Shadow, QColor(10, 12, 18));
+  pal.setColor(QPalette::Light, QColor(230, 234, 240));
+  pal.setColor(QPalette::Midlight, QColor(224, 229, 236));
+  pal.setColor(QPalette::Mid, QColor(214, 220, 228));
+  pal.setColor(QPalette::Dark, QColor(196, 203, 212));
+  pal.setColor(QPalette::Shadow, QColor(140, 149, 161));
 #if QT_VERSION >= QT_VERSION_CHECK(5, 12, 0)
   pal.setColor(QPalette::PlaceholderText, faint);
 #endif
@@ -116,61 +118,78 @@ void applyModernTheme(QApplication& app) {
   app.setPalette(pal);
 
   app.setStyleSheet(R"(
-    QMainWindow, QDialog { background: #1e2433; }
-    #titleBar { background: #171c28; border-bottom: 1px solid #2c3450; }
-    #titleText { font-weight: 600; font-size: 13px; }
+    QMainWindow, QDialog { background: #f4f6f8; }
+    #titleBar { background: #ffffff; border-bottom: 1px solid #e3e6ec; }
+    #titleText { font-weight: 600; font-size: 13px; color: #1f2430; }
     #btnMin, #btnClose {
-      background: transparent; color: #9aa7bd;
+      background: transparent; color: #6b7686;
       border: none; border-radius: 4px; font-size: 13px;
     }
-    #btnMin:hover { background: #2c456e; color: #e8eaf0; }
+    #btnMin:hover { background: #eef1f5; color: #1f2430; }
     #btnClose:hover { background: #e05561; color: #ffffff; }
-    QLineEdit {
-      background: #0f1219; color: #e8eaf0;
-      border: 1px solid #333c4e; border-radius: 8px;
-      padding: 8px 12px; font-size: 14px;
-      selection-background-color: #61afef; selection-color: #ffffff;
+    #menuBtn {
+      background: transparent; color: #333c4e;
+      border: none; border-radius: 4px; padding: 4px 10px;
     }
-    QLineEdit:focus { border: 1px solid #61afef; }
+    #menuBtn:hover { background: #eef1f5; color: #1f2430; }
+    #menuBtn:pressed { background: #e2e9f3; }
+    QLineEdit {
+      background: #ffffff; color: #1f2430;
+      border: 1px solid #d3d9e0; border-radius: 8px;
+      padding: 8px 12px; font-size: 14px;
+      selection-background-color: #2563eb; selection-color: #ffffff;
+    }
+    QLineEdit:focus { border: 1px solid #2563eb; }
     QHeaderView::section {
-      background: #232b3b; color: #9aa7bd; border: none;
-      border-bottom: 1px solid #333c4e;
+      background: #f1f3f6; color: #6b7686; border: none;
+      border-bottom: 1px solid #e3e6ec;
       padding: 6px 8px; font-weight: 600;
     }
     QTableWidget, QAbstractScrollArea {
-      background: #171c28; alternate-background-color: #1b2230;
-      color: #e8eaf0; border: none; gridline-color: transparent;
-      selection-background-color: #2c456e; selection-color: #ffffff;
+      background: #ffffff; alternate-background-color: #f8fafc;
+      color: #1f2430; border: none; gridline-color: transparent;
+      selection-background-color: #dbeafe; selection-color: #1f2430;
       outline: none;
     }
     QTableWidget::item { padding: 4px 6px; border: none; }
     QToolBar {
-      background: #232b3b; border: none;
-      border-bottom: 1px solid #333c4e;
+      background: #ffffff; border: none;
+      border-top: 1px solid #e3e6ec; border-bottom: 1px solid #e3e6ec;
       spacing: 4px; padding: 4px;
     }
-    QToolButton { background: transparent; color: #e8eaf0; border: none; border-radius: 5px; padding: 5px 12px; }
-    QToolButton:hover { background: #2c456e; }
-    QToolButton:checked, QToolButton:pressed { background: #2c456e; color: #ffffff; }
-    QToolBar::separator { background: #333c4e; width: 1px; margin: 4px 6px; }
-    QStatusBar { background: #232b3b; color: #9aa7bd; }
+    QToolButton { background: transparent; color: #333c4e; border: none; border-radius: 5px; padding: 5px 12px; }
+    QToolButton:hover { background: #eef1f5; color: #1f2430; }
+    QToolButton:checked, QToolButton:pressed { background: #dbeafe; color: #1f2430; }
+    QToolBar::separator { background: #e3e6ec; width: 1px; margin: 4px 6px; }
+    QStatusBar { background: #f1f3f6; color: #6b7686; }
     QMenu {
-      background: #232b3b; color: #e8eaf0;
-      border: 1px solid #333c4e; border-radius: 6px; padding: 4px;
+      background: #ffffff; color: #1f2430;
+      border: 1px solid #d3d9e0; border-radius: 6px; padding: 4px;
     }
     QMenu::item { padding: 6px 20px; border-radius: 4px; }
-    QMenu::item:selected { background: #2c456e; color: #ffffff; }
-    QMenu::separator { background: #333c4e; height: 1px; margin: 4px 8px; }
-    QMenuBar {
-      background: #232b3b; color: #e8eaf0;
-      border: none; border-bottom: 1px solid #333c4e;
-      padding: 0; margin: 0;
+    QMenu::item:selected { background: #dbeafe; color: #1f2430; }
+    QMenu::item:disabled { color: #a8b0bc; }
+    QMenu::separator { background: #e3e6ec; height: 1px; margin: 4px 8px; }
+    QToolTip { background: #ffffff; color: #1f2430; border: 1px solid #d3d9e0; }
+    QLabel { color: #1f2430; }
+    QGroupBox {
+      border: 1px solid #e3e6ec; border-radius: 8px; margin-top: 10px;
+      padding-top: 6px; color: #333c4e;
     }
-    QMenuBar::item { padding: 5px 12px; background: transparent; border-radius: 4px; }
-    QMenuBar::item:selected { background: #2c456e; color: #ffffff; }
-    QMenuBar::item:pressed { background: #2c456e; }
-    QToolTip { background: #232b3b; color: #e8eaf0; border: 1px solid #333c4e; }
-    QLabel { color: #e8eaf0; }
+    QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }
+    QPushButton {
+      background: #ffffff; color: #1f2430;
+      border: 1px solid #d3d9e0; border-radius: 6px; padding: 6px 14px;
+    }
+    QPushButton:hover { background: #eef1f5; }
+    QPushButton:pressed { background: #e2e9f3; }
+    QCheckBox { color: #1f2430; spacing: 6px; }
+    QListWidget {
+      background: #ffffff; color: #1f2430; border: 1px solid #d3d9e0;
+      border-radius: 6px; outline: none;
+    }
+    QListWidget::item { padding: 4px 6px; border-radius: 4px; }
+    QListWidget::item:selected { background: #dbeafe; color: #1f2430; }
   )");
 }
 
@@ -560,15 +579,34 @@ class MainWindow : public QMainWindow {
     tl->addWidget(minBtn_);
     tl->addWidget(closeBtn_);
 
-    // 菜单栏（标题栏下方一行；Windows 惯例：文件/工具/帮助）
-    menubar_ = new QMenuBar(this);
-    menubar_->setObjectName("mainMenu");
-    auto* fileMenu = menubar_->addMenu("文件");
+    // ---- 自绘菜单行（点开式菜单按钮：一次只出现一个菜单，杜绝系统菜单栏叠加缺陷）----
+    auto* menuRow = new QWidget(this);
+    auto* mr = new QHBoxLayout(menuRow);
+    mr->setContentsMargins(8, 2, 8, 2);
+    mr->setSpacing(2);
+    auto addMenuBtn = [&](const QString& text, QMenu* menu) {
+      auto* b = new QToolButton(menuRow);
+      b->setObjectName("menuBtn");
+      b->setText(text);
+      b->setPopupMode(QToolButton::InstantPopup);
+      b->setMenu(menu);
+      b->setCursor(Qt::PointingHandCursor);
+      b->setFocusPolicy(Qt::NoFocus);
+      mr->addWidget(b);
+      return b;
+    };
+
+    auto* fileMenu = new QMenu(this);
+    QAction* closeWinAct = fileMenu->addAction("关闭窗口");
+    closeWinAct->setShortcut(QKeySequence("Ctrl+W"));
+    connect(closeWinAct, &QAction::triggered, this, [this] { close(); });  // 走 closeEvent -> 隐藏到托盘
+    fileMenu->addSeparator();
     QAction* quitAct = fileMenu->addAction("退出");
     quitAct->setShortcut(QKeySequence("Ctrl+Q"));
     connect(quitAct, &QAction::triggered, this, [this] { quitApp(); });
+    addMenuBtn("文件", fileMenu);
 
-    auto* toolsMenu = menubar_->addMenu("工具");
+    auto* toolsMenu = new QMenu(this);
     QAction* mRebuild = toolsMenu->addAction("重建索引");
     mRebuild->setShortcut(QKeySequence("Ctrl+R"));
     connect(mRebuild, &QAction::triggered, this, [this] { doRebuild(); });
@@ -581,13 +619,16 @@ class MainWindow : public QMainWindow {
     toolsMenu->addSeparator();
     QAction* mConfig = toolsMenu->addAction("打开配置文件目录");
     connect(mConfig, &QAction::triggered, this, [this] { openConfigDir(); });
+    addMenuBtn("工具", toolsMenu);
 
-    auto* helpMenu = menubar_->addMenu("帮助");
+    auto* helpMenu = new QMenu(this);
     connect(helpMenu->addAction("关于 Lsearch"), &QAction::triggered, this, [this] {
       QMessageBox::about(this, "关于 Lsearch",
                          "Lsearch 0.1.0\n\nEverything 风格的文件名搜索（麒麟/信创桌面）。\n"
                          "守护进程 lsearchd + CLI/TUI/GUI 多前端。");
     });
+    addMenuBtn("帮助", helpMenu);
+    mr->addStretch(1);
 
     headerCont_ = new QWidget(this);
     headerCont_->setObjectName("titleBar");
@@ -595,8 +636,8 @@ class MainWindow : public QMainWindow {
     hc->setContentsMargins(0, 0, 0, 0);
     hc->setSpacing(0);
     hc->addWidget(titleBar_);
-    hc->addWidget(menubar_);
-    setMenuWidget(headerCont_);  // 标题栏 + 菜单栏整体位于中央区之上
+    hc->addWidget(menuRow);
+    setMenuWidget(headerCont_);  // 标题栏 + 菜单行整体位于中央区之上
 
     input_ = new QLineEdit(this);
     input_->setPlaceholderText("输入关键词…（仅匹配文件名，大小写不敏感；* ? 为通配符）");
@@ -663,7 +704,7 @@ class MainWindow : public QMainWindow {
 
     // ---- 重建进度：状态栏右侧常驻标签 + 每秒轮询 ----
     rebuildLabel_ = new QLabel("", this);
-    rebuildLabel_->setStyleSheet("color:#9aa7bd;padding:0 8px;");
+    rebuildLabel_->setStyleSheet("color:#6b7686;padding:0 8px;");
     statusBar()->addPermanentWidget(rebuildLabel_);
     pollTimer_ = new QTimer(this);
     pollTimer_->setInterval(1000);
@@ -672,7 +713,6 @@ class MainWindow : public QMainWindow {
 
     // 无边框窗口的鼠标跟踪：标题栏 + 各主要控件
     titleBar_->installEventFilter(this);
-    menubar_->installEventFilter(this);
     input_->installEventFilter(this);
     table_->installEventFilter(this);
     tb->installEventFilter(this);
@@ -860,7 +900,7 @@ class MainWindow : public QMainWindow {
         auto* path = new QTableWidgetItem(QString::fromStdString(r.path));
         table_->setItem(row, kColPath, path);
         auto* type = new QTableWidgetItem(r.is_dir ? "目录" : "文件");
-        if (r.is_dir) type->setForeground(QColor(152, 195, 121));
+        if (r.is_dir) type->setForeground(QColor(21, 128, 61));
         table_->setItem(row, kColType, type);
         auto* sz = new QTableWidgetItem(r.is_dir ? "-" : humanSize(r.size));
         sz->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
@@ -875,7 +915,6 @@ class MainWindow : public QMainWindow {
 
   QWidget* titleBar_ = nullptr;
   QWidget* headerCont_ = nullptr;
-  QMenuBar* menubar_ = nullptr;
   QToolButton* minBtn_ = nullptr;
   QToolButton* closeBtn_ = nullptr;
   QLineEdit* input_ = nullptr;
