@@ -459,11 +459,17 @@ class MainWindow : public QMainWindow {
 
   // 无边框窗口：拖拽/缩放统一入口（过滤标题栏与主要子控件）
   bool eventFilter(QObject* obj, QEvent* ev) override {
-    // 菜单按钮：悬停/点按打开（仅在无菜单打开时可收到这些事件；
-    // 菜单打开后的切换/收起全部走 watchMenus 全局光标轮询，绕过弹窗抓取）
-    if ((ev->type() == QEvent::Enter || ev->type() == QEvent::MouseButtonPress) && isMenuButton(obj)) {
+    // 菜单：**点击才打开**（不悬停误弹）；菜单打开后的“飘过去切换”由
+    // watchMenus 全局光标轮询完成（绕过弹窗抓取吞事件的问题）
+    if (ev->type() == QEvent::MouseButtonPress && isMenuButton(obj)) {
       openMenuAt(menuButtonIndex(obj));
-      return ev->type() == QEvent::MouseButtonPress;
+      return true;
+    }
+    // 点击其它地方（搜索框/表格/空白）收摊：QMenu 弹窗自带抓取，外部点击
+    // 会自动收起菜单并重放事件；这里顺带确保状态复位
+    if (ev->type() == QEvent::MouseButtonPress && activeMenu_ >= 0 &&
+        !isMenuButton(obj)) {
+      closeAllMenus();
     }
     if (ev->type() == QEvent::MouseButtonPress || ev->type() == QEvent::MouseMove ||
         ev->type() == QEvent::MouseButtonRelease || ev->type() == QEvent::MouseButtonDblClick) {
@@ -474,12 +480,11 @@ class MainWindow : public QMainWindow {
     return QMainWindow::eventFilter(obj, ev);
   }
 
-  // 菜单打开期间（弹窗会抓取鼠标、吞掉按钮的悬停事件）：
-  // 用全局光标位置轮询来实现 切换/收起，60ms 一查，即时跟手
+  // 菜单打开期间：全局光标轮询（60ms）——光标飘到别的标题上立即切换，
+  // 飘到别处则保持（外部点击/Esc 由 QMenu 自动收起）
   void watchMenus() {
     if (activeMenu_ < 0) return;
     const QPoint g = QCursor::pos();
-    // 1) 光标落在某个菜单按钮上 -> 切换（或保持）
     for (size_t i = 0; i < menuBtns_.size(); ++i) {
       QRect r(menuBtns_[i]->mapToGlobal(QPoint(0, 0)), menuBtns_[i]->size());
       if (r.contains(g)) {
@@ -487,11 +492,6 @@ class MainWindow : public QMainWindow {
         return;
       }
     }
-    // 2) 光标仍在打开的菜单内 -> 保持
-    QMenu* m = menuMenus_[activeMenu_];
-    if (m->isVisible() && m->geometry().contains(g)) return;
-    // 3) 其它情况 -> 收起
-    closeAllMenus();
   }
 
   bool isMenuButton(QObject* o) const { return menuButtonIndex(o) >= 0; }
