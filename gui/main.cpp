@@ -501,22 +501,22 @@ class MainWindow : public QMainWindow {
     return -1;
   }
 
-  // 打开第 i 个菜单：先同步关闭其它菜单，并把 hide 立即冲刷到窗口系统，
-  // 确保旧菜单先真正消失、再弹新的（杜绝两个菜单同时显示）
+  // 打开第 i 个菜单：单例弹窗 menu_ 复用——先清空、装上第 i 组的菜单项，再弹出。
+  // 全程序只有这一扇弹窗，从结构上杜绝“两个菜单同时显示”。
   void openMenuAt(int i) {
     if (i < 0 || i >= static_cast<int>(menuBtns_.size())) return;
-    if (activeMenu_ == i && menuMenus_[i]->isVisible()) {
-      return;
-    }
-    closeAllMenus();
+    if (activeMenu_ == i && menu_->isVisible()) return;
+    menu_->hide();
     QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);  // 提交 hide
+    menu_->clear();
+    menu_->addActions(menuModels_[i]->actions());
     activeMenu_ = i;
     QToolButton* b = menuBtns_[i];
-    menuMenus_[i]->popup(b->mapToGlobal(QPoint(0, b->height() + 2)));
+    menu_->popup(b->mapToGlobal(QPoint(0, b->height() + 2)));
   }
 
   void closeAllMenus() {
-    for (QMenu* m : menuMenus_) m->hide();
+    menu_->hide();
     activeMenu_ = -1;
   }
 
@@ -640,14 +640,18 @@ class MainWindow : public QMainWindow {
     tl->addWidget(minBtn_);
     tl->addWidget(closeBtn_);
 
-    // ---- 自绘菜单行（点开式菜单按钮：一次只出现一个菜单，杜绝系统菜单栏叠加缺陷）----
+    // ---- 自绘菜单行 ----
+    // 单例弹窗 menu_：全程序只有这一扇菜单窗口；三个标题的菜单项分别存在
+    // 三个“模板” QMenu（从不弹出），打开时把对应模板的条目填进 menu_ 再弹出。
+    // 这样物理上不可能出现两个菜单同时显示。
+    menu_ = new QMenu(this);
+    connect(menu_, &QMenu::aboutToHide, this, [this] { activeMenu_ = -1; });
+
     menuRow_ = new QWidget(this);
     auto* mr = new QHBoxLayout(menuRow_);
     mr->setContentsMargins(8, 2, 8, 2);
     mr->setSpacing(2);
-    // 悬停式菜单按钮（不 setMenu/InstantPopup，菜单由 eventFilter 统一管理：
-    // 悬停即切换、点按也可开、同步关闭其它、离开自动收起）
-    auto addMenuBtn = [&](const QString& text, QMenu* menu) {
+    auto addMenuBtn = [&](const QString& text) {
       auto* b = new QToolButton(menuRow_);
       b->setObjectName("menuBtn");
       b->setText(text);
@@ -656,13 +660,6 @@ class MainWindow : public QMainWindow {
       b->setMouseTracking(true);
       mr->addWidget(b);
       menuBtns_.push_back(b);
-      menuMenus_.push_back(menu);
-      connect(menu, &QMenu::aboutToHide, this, [this, menu] {
-        // 外部点击/切换导致的隐藏：同步 activeMenu_ 状态
-        int i = 0;
-        for (QMenu* m : menuMenus_) { if (m == menu) break; ++i; }
-        if (i < static_cast<int>(menuMenus_.size()) && activeMenu_ == i) activeMenu_ = -1;
-      });
       return b;
     };
 
@@ -681,7 +678,8 @@ class MainWindow : public QMainWindow {
     QAction* quitAct = fileMenu->addAction("退出");
     quitAct->setShortcut(QKeySequence("Ctrl+Q"));
     connect(quitAct, &QAction::triggered, this, [this] { quitApp(); });
-    addMenuBtn("文件", fileMenu);
+    menuModels_.push_back(fileMenu);
+    addMenuBtn("文件");
 
     auto* toolsMenu = new QMenu(this);
     QAction* mRebuild = toolsMenu->addAction("重建索引");
@@ -696,7 +694,8 @@ class MainWindow : public QMainWindow {
     toolsMenu->addSeparator();
     QAction* mConfig = toolsMenu->addAction("打开配置文件目录");
     connect(mConfig, &QAction::triggered, this, [this] { openConfigDir(); });
-    addMenuBtn("工具", toolsMenu);
+    menuModels_.push_back(toolsMenu);
+    addMenuBtn("工具");
 
     auto* helpMenu = new QMenu(this);
     connect(helpMenu->addAction("关于 Lsearch"), &QAction::triggered, this, [this] {
@@ -704,11 +703,12 @@ class MainWindow : public QMainWindow {
                          "Lsearch 0.1.0\n\nEverything 风格的文件名搜索（麒麟/信创桌面）。\n"
                          "守护进程 lsearchd + CLI/TUI/GUI 多前端。");
     });
-    addMenuBtn("帮助", helpMenu);
+    menuModels_.push_back(helpMenu);
+    addMenuBtn("帮助");
     mr->addStretch(1);
     menuRow_->setMouseTracking(true);
 
-    // 菜单打开期间用全局光标轮询实现切换/收起（绕过弹窗抓取吞悬停事件的问题）
+    // 菜单打开期间用全局光标轮询实现“飘过去切换”（绕过弹窗抓取吞悬停事件）
     menuWatchTimer_ = new QTimer(this);
     menuWatchTimer_->setInterval(60);
     connect(menuWatchTimer_, &QTimer::timeout, this, [this] { watchMenus(); });
@@ -1004,9 +1004,11 @@ class MainWindow : public QMainWindow {
   QWidget* headerCont_ = nullptr;
   QWidget* menuRow_ = nullptr;
   std::vector<QToolButton*> menuBtns_;
-  std::vector<QMenu*> menuMenus_;
   int activeMenu_ = -1;
   QTimer* menuWatchTimer_ = nullptr;
+  // 单例菜单弹窗 + 三个“模板”菜单（只存菜单项，从不直接弹出）
+  QMenu* menu_ = nullptr;
+  std::vector<QMenu*> menuModels_;
   QToolButton* minBtn_ = nullptr;
   QToolButton* closeBtn_ = nullptr;
   QLineEdit* input_ = nullptr;
