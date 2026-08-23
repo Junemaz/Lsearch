@@ -67,6 +67,7 @@ constexpr int kColType = 1;
 constexpr int kColSize = 2;
 constexpr int kColMtime = 3;
 constexpr int kMaxRows = 2000;
+constexpr int kEdge = 6;  // 无边框窗口的边缘缩放手感区
 
 QString humanSize(int64_t n) { return QString::fromStdString(lsearch::humanSize(n)); }
 QString isoTime(int64_t t) { return QString::fromStdString(lsearch::isoTime(t)); }
@@ -433,9 +434,12 @@ class MainWindow : public QMainWindow {
 
  public:
   MainWindow() {
-    setWindowTitle("Lsearch [flw]");  // ASCII 构建标记：便于确认当前运行版本
+    setWindowTitle("Lsearch [qmenubar]");  // ASCII 构建标记：便于确认当前运行版本
     setWindowIcon(makeAppIcon());
-    setMinimumSize(520, 360);
+    // 无系统边框：白框/系统标题栏一去不返，全部自绘
+    setWindowFlags(Qt::Window | Qt::FramelessWindowHint);
+    resize(920, 640);
+    setMouseTracking(true);
 
     buildUi();
     setupTray();
@@ -449,6 +453,7 @@ class MainWindow : public QMainWindow {
     if (worker_.joinable()) worker_.join();
     if (tray_) tray_->hide();
   }
+
 
  private slots:
   void onQueryChanged(const QString&) { timer_->start(); }
@@ -470,7 +475,7 @@ class MainWindow : public QMainWindow {
 
  private:
 
- void buildUi() {
+  void buildUi() {
     // ---- 标准菜单栏（点击打开、飘过去自动切换、单活动弹窗均由 Qt 内置处理；
     //      外层 FramelessWindow 会接管此 menubar 放进它的布局）----
     menubar_ = menuBar();
@@ -513,8 +518,10 @@ class MainWindow : public QMainWindow {
                          "守护进程 lsearchd + CLI/TUI/GUI 多前端。");
     });
 
+
     input_ = new QLineEdit(this);
     input_->setPlaceholderText("输入关键词…（仅匹配文件名，大小写不敏感；* ? 为通配符）");
+    input_->setMouseTracking(true);
 
     table_ = new QTableWidget(this);
     table_->setColumnCount(4);
@@ -531,7 +538,8 @@ class MainWindow : public QMainWindow {
     table_->setColumnWidth(1, 60);
     table_->setColumnWidth(2, 80);
     table_->setColumnWidth(3, 150);
-    
+    table_->setMouseTracking(true);
+
     auto* central = new QWidget(this);
     auto* lay = new QVBoxLayout(central);
     lay->setContentsMargins(8, 8, 8, 4);
@@ -545,7 +553,8 @@ class MainWindow : public QMainWindow {
     // ---- 工具栏（仅保留高频操作；其余进菜单）----
     auto* tb = addToolBar("工具");
     tb->setMovable(false);
-    
+    tb->setMouseTracking(true);
+
     QAction* rebuildAct = tb->addAction("重建索引");
     rebuildAct->setShortcut(QKeySequence("Ctrl+R"));
     connect(rebuildAct, &QAction::triggered, this, [this] { doRebuild(); });
@@ -582,6 +591,12 @@ class MainWindow : public QMainWindow {
     connect(pollTimer_, &QTimer::timeout, this, &MainWindow::pollRebuild);
     pollTimer_->start();
 
+    // 无边框窗口的鼠标跟踪：标题栏 + 各主要控件
+    titleBar_->installEventFilter(this);
+    input_->installEventFilter(this);
+    table_->installEventFilter(this);
+    tb->installEventFilter(this);
+    central->installEventFilter(this);
   }
 
   void setupTray() {
@@ -816,7 +831,6 @@ int main(int argc, char** argv) {
   w.setTitle("Lsearch [flw]");
   w.setAppIcon(makeAppIcon());
   w.resize(940, 660);
-  w.show();
   return QApplication::exec();
 }
 

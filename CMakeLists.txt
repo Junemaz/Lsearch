@@ -64,6 +64,19 @@ if(BUILD_TUI)
   endif()
 endif()
 
+# ---- third_party: Yet-Zio/FramelessWindow（无边框窗口库）----
+# 已本地化并打补丁：Qt5 兼容（position()→pos()/globalPos()）+ 浅色 CSS
+add_library(framelesswindow STATIC
+  third_party/FramelessWindow/src/framelesswindow.cpp
+  third_party/FramelessWindow/src/FramelessWindow.ui
+  third_party/FramelessWindow/src/framelesswindow.qrc
+)
+target_include_directories(framelesswindow PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/FramelessWindow/src)
+target_link_libraries(framelesswindow PUBLIC Qt5::Widgets)
+set_target_properties(framelesswindow PROPERTIES
+  AUTOMOC ON AUTOUIC ON AUTORCC ON
+  CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+
 # ---- gui (Qt5) ----
 option(BUILD_GUI "Build the Qt5 GUI" ON)
 if(BUILD_GUI)
@@ -71,7 +84,7 @@ if(BUILD_GUI)
   if(Qt5Widgets_FOUND)
     add_executable(lsearch-gui gui/main.cpp)
     target_include_directories(lsearch-gui PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-    target_link_libraries(lsearch-gui PRIVATE lsearch_core lsearch_ipc Qt5::Widgets)
+    target_link_libraries(lsearch-gui PRIVATE lsearch_core lsearch_ipc Qt5::Widgets framelesswindow)
     set_target_properties(lsearch-gui PROPERTIES
       AUTOMOC ON
       CXX_STANDARD 17
