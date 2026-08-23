@@ -1,0 +1,72 @@
+FramelessWindow
+{
+    background-color: #f4f6f8;
+    border: 1px solid #d3d9e0;
+}
+
+#menubar{
+    background-color: #ffffff;
+    color: #333c4e;
+}
+
+
+#titleBar
+{
+    border-top: 0px solid transparent;
+    border-top-left-radius: 10px;
+    border-top-right-radius: 10px;
+    background-color: #ffffff;
+}
+
+titleMaxStyle{
+    border-top: 0px solid transparent;
+    border-top-left-radius: 0px;
+    border-top-right-radius: 0px;
+    background-color: #ffffff;
+}
+
+#appTitle{
+    font-size: 13px;
+    color: #1f2430;
+}
+
+#bottom_bar{
+    background-color: #f1f3f6;
+}
+
+QLabel{
+    color: #1f2430;
+}
+
+QToolButton, QToolButton::menu-indicator, QToolButton::up-arrow, QToolButton::down-arrow, QToolButton::left-arrow, QToolButton::right-arrow, QToolButton::pressed
+{
+    border: 0px solid transparent;
+    background-color: transparent;
+}
+
+QToolButton:hover{
+    background-color: #eef1f5;
+}
+
+QPushButton, QPushButton::menu-indicator, QPushButton::up-arrow, QPushButton::down-arrow, QPushButton::left-arrow, QPushButton::right-arrow, QPushButton::pressed
+{
+    border: 0px solid transparent;
+    background-color: transparent;
+}
+
+QPushButton:hover{
+    border: 1px solid;
+    border-radius: 10px;
+    border-color: #d3d9e0;
+}
+
+QPushButton#closeBtn:hover{
+    background-color: #e05561;
+}
+
+QSizeGrip{
+    background-color: #f1f3f6;
+    width: 5px;
+    height: 10px;
+    margin: 5px;
+}
