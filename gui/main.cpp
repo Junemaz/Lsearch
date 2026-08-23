@@ -1,27 +1,30 @@
 // Lsearch GUI (Qt5)：Everything 风格的桌面搜索界面（V2）
 // 复用 ipc/client 访问 lsearchd（自动拉起守护进程），不直接触碰 core。
-// 特性：实时搜索 + 结果表格 + 双击打开 + 工具栏(重建/过滤/统计/配置) + 托盘常驻 + 深色主题。
+// 特性：无系统边框(自绘深色标题栏+拖拽+缩放) + 实时搜索 + 表格 + 工具栏 + 托盘常驻。
 #include "core/config.h"
 #include "core/entry.h"
 #include "core/util.h"
 #include "ipc/client.h"
 
 #include <QAction>
-#include <QActionGroup>
 #include <QApplication>
 #include <QBrush>
 #include <QCloseEvent>
 #include <QColor>
 #include <QDesktopServices>
 #include <QDir>
+#include <QEvent>
 #include <QFrame>
 #include <QHeaderView>
+#include <QHBoxLayout>
 #include <QIcon>
 #include <QKeySequence>
+#include <QLabel>
 #include <QLineEdit>
 #include <QMainWindow>
 #include <QMenu>
 #include <QMessageBox>
+#include <QMouseEvent>
 #include <QPainter>
 #include <QPalette>
 #include <QPixmap>
@@ -31,13 +34,14 @@
 #include <QTableWidget>
 #include <QTimer>
 #include <QToolBar>
+#include <QToolButton>
 #include <QUrl>
 #include <QVBoxLayout>
 #include <QWidget>
 
 #include <atomic>
-#include <cstdlib>
 #include <condition_variable>
+#include <cstdlib>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -50,13 +54,13 @@ constexpr int kColType = 1;
 constexpr int kColSize = 2;
 constexpr int kColMtime = 3;
 constexpr int kMaxRows = 2000;
+constexpr int kEdge = 6;  // 无边框窗口的边缘缩放手感区
 
 QString humanSize(int64_t n) { return QString::fromStdString(lsearch::humanSize(n)); }
 QString isoTime(int64_t t) { return QString::fromStdString(lsearch::isoTime(t)); }
 
 void xdgOpen(const QString& path) { QProcess::startDetached("xdg-open", QStringList() << path); }
 
-// 自绘图标：深色圆角底 + 放大镜（避免依赖资源文件）
 QIcon makeAppIcon() {
   QPixmap pm(64, 64);
   pm.fill(Qt::transparent);
@@ -74,12 +78,8 @@ QIcon makeAppIcon() {
   return QIcon(pm);
 }
 
-// 深色现代主题（Fusion + 完整暗色调色板 + QSS）
-// 关键：必须把 Light/Midlight/Mid/Dark/Shadow 也配成暗色，
-// 否则 Fusion 派生的"凸面/边框"色会偏白，造成用户看到的"外圈白框"。
 void applyModernTheme(QApplication& app) {
   app.setStyle("Fusion");
-
   QPalette pal;
   const QColor window(30, 36, 51), base(15, 18, 25), alt(27, 34, 48);
   const QColor text(232, 234, 240), faint(154, 167, 189), accent(97, 175, 239);
@@ -96,7 +96,6 @@ void applyModernTheme(QApplication& app) {
   pal.setColor(QPalette::HighlightedText, QColor(255, 255, 255));
   pal.setColor(QPalette::ToolTipBase, toolbg);
   pal.setColor(QPalette::ToolTipText, text);
-  // Fusion 边框/凸面派生色：保持暗色，避免白框
   pal.setColor(QPalette::Light, border);
   pal.setColor(QPalette::Midlight, QColor(45, 53, 70));
   pal.setColor(QPalette::Mid, QColor(40, 48, 63));
@@ -110,6 +109,14 @@ void applyModernTheme(QApplication& app) {
 
   app.setStyleSheet(R"(
     QMainWindow, QDialog { background: #1e2433; }
+    #titleBar { background: #171c28; border-bottom: 1px solid #2c3450; }
+    #titleText { font-weight: 600; font-size: 13px; }
+    #btnMin, #btnClose {
+      background: transparent; color: #9aa7bd;
+      border: none; border-radius: 4px; font-size: 13px;
+    }
+    #btnMin:hover { background: #2c456e; color: #e8eaf0; }
+    #btnClose:hover { background: #e05561; color: #ffffff; }
     QLineEdit {
       background: #0f1219; color: #e8eaf0;
       border: 1px solid #333c4e; border-radius: 8px;
@@ -134,10 +141,7 @@ void applyModernTheme(QApplication& app) {
       border-bottom: 1px solid #333c4e;
       spacing: 4px; padding: 4px;
     }
-    QToolButton {
-      background: transparent; color: #e8eaf0;
-      border: none; border-radius: 5px; padding: 5px 12px;
-    }
+    QToolButton { background: transparent; color: #e8eaf0; border: none; border-radius: 5px; padding: 5px 12px; }
     QToolButton:hover { background: #2c456e; }
     QToolButton:checked, QToolButton:pressed { background: #2c456e; color: #ffffff; }
     QToolBar::separator { background: #333c4e; width: 1px; margin: 4px 6px; }
@@ -151,8 +155,6 @@ void applyModernTheme(QApplication& app) {
     QMenu::separator { background: #333c4e; height: 1px; margin: 4px 8px; }
     QToolTip { background: #232b3b; color: #e8eaf0; border: 1px solid #333c4e; }
     QLabel { color: #e8eaf0; }
-    QMessageBox { background: #1e2433; }
-    QMessageBox QLabel { color: #e8eaf0; }
   )");
 }
 
@@ -165,7 +167,10 @@ class MainWindow : public QMainWindow {
   MainWindow() {
     setWindowTitle("Lsearch");
     setWindowIcon(makeAppIcon());
+    // 无系统边框：白框/系统标题栏一去不返，全部自绘
+    setWindowFlags(Qt::Window | Qt::FramelessWindowHint);
     resize(920, 640);
+    setMouseTracking(true);
 
     buildUi();
     setupTray();
@@ -192,6 +197,17 @@ class MainWindow : public QMainWindow {
     }
   }
 
+  // 无边框窗口：拖拽/缩放统一入口（过滤标题栏与主要子控件）
+  bool eventFilter(QObject* obj, QEvent* ev) override {
+    if (ev->type() == QEvent::MouseButtonPress || ev->type() == QEvent::MouseMove ||
+        ev->type() == QEvent::MouseButtonRelease || ev->type() == QEvent::MouseButtonDblClick) {
+      auto* m = static_cast<QMouseEvent*>(ev);
+      QPoint winPos = (obj == this) ? m->pos() : static_cast<QWidget*>(obj)->mapTo(this, m->pos());
+      if (handleTopLevelMouse(static_cast<QWidget*>(obj), m, winPos)) return true;
+    }
+    return QMainWindow::eventFilter(obj, ev);
+  }
+
  private slots:
   void onQueryChanged(const QString&) { timer_->start(); }
 
@@ -211,9 +227,102 @@ class MainWindow : public QMainWindow {
   }
 
  private:
+  bool handleTopLevelMouse(QWidget* src, QMouseEvent* m, const QPoint& winPos) {
+    if (m->button() == Qt::LeftButton && m->type() == QEvent::MouseButtonPress) {
+      // 边缘 -> 开始缩放
+      edges_ = 0;
+      if (winPos.x() <= kEdge) edges_ |= 1;        // W
+      if (width() - winPos.x() <= kEdge) edges_ |= 2;  // E
+      if (winPos.y() <= kEdge) edges_ |= 4;        // N
+      if (height() - winPos.y() <= kEdge) edges_ |= 8;  // S
+      if (edges_) {
+        resizing_ = true;
+        pressGlobal_ = m->globalPos();
+        startGeo_ = geometry();
+        return true;
+      }
+      // 标题栏空白区 -> 开始拖动
+      if (src == titleBar_) {
+        dragging_ = true;
+        dragOffset_ = m->globalPos() - frameGeometry().topLeft();
+        return true;
+      }
+    } else if (m->type() == QEvent::MouseButtonDblClick && src == titleBar_) {
+      if (isMaximized()) showNormal(); else showMaximized();
+      return true;
+    } else if (m->type() == QEvent::MouseMove) {
+      if (resizing_ && (m->buttons() & Qt::LeftButton)) {
+        QPoint d = m->globalPos() - pressGlobal_;
+        QRect g = startGeo_;
+        if (edges_ & 2) g.setWidth(startGeo_.width() + d.x());                // E
+        if (edges_ & 1) { g.setX(startGeo_.x() + d.x()); g.setWidth(startGeo_.width() - d.x()); }  // W
+        if (edges_ & 8) g.setHeight(startGeo_.height() + d.y());              // S
+        if (edges_ & 4) { g.setY(startGeo_.y() + d.y()); g.setHeight(startGeo_.height() - d.y()); }  // N
+        if (g.width() < 420) g.setWidth(420);
+        if (g.height() < 320) g.setHeight(320);
+        setGeometry(g);
+        return true;
+      }
+      if (dragging_ && (m->buttons() & Qt::LeftButton)) {
+        move(m->globalPos() - dragOffset_);
+        return true;
+      }
+      // 悬浮边缘时给缩放光标
+      int e = 0;
+      if (winPos.x() <= kEdge) e |= 1;
+      if (width() - winPos.x() <= kEdge) e |= 2;
+      if (winPos.y() <= kEdge) e |= 4;
+      if (height() - winPos.y() <= kEdge) e |= 8;
+      Qt::CursorShape cur = Qt::ArrowCursor;
+      if (e == (1 | 2)) cur = Qt::SizeHorCursor;
+      else if (e == (4 | 8)) cur = Qt::SizeVerCursor;
+      else if (e == (1 | 4) || e == (2 | 8)) cur = Qt::SizeFDiagCursor;
+      else if (e == (2 | 4) || e == (1 | 8)) cur = Qt::SizeBDiagCursor;
+      else if (e & 1 || e & 2) cur = Qt::SizeHorCursor;
+      else if (e & 4 || e & 8) cur = Qt::SizeVerCursor;
+      src->setCursor(cur);
+      if (!e) src->unsetCursor();
+      return false;  // 边缘之外继续交给子控件
+    } else if (m->type() == QEvent::MouseButtonRelease) {
+      if (resizing_) { resizing_ = false; edges_ = 0; src->unsetCursor(); return true; }
+      if (dragging_) { dragging_ = false; return true; }
+    }
+    return false;
+  }
+
   void buildUi() {
+    // ---- 自绘标题栏 ----
+    titleBar_ = new QWidget(this);
+    titleBar_->setObjectName("titleBar");
+    titleBar_->setFixedHeight(38);
+    titleBar_->setMouseTracking(true);
+    auto* tl = new QHBoxLayout(titleBar_);
+    tl->setContentsMargins(10, 0, 6, 0);
+    tl->setSpacing(8);
+    auto* icon = new QLabel(titleBar_);
+    icon->setPixmap(makeAppIcon().pixmap(18, 18));
+    auto* title = new QLabel("Lsearch", titleBar_);
+    title->setObjectName("titleText");
+    minBtn_ = new QToolButton(titleBar_);
+    minBtn_->setObjectName("btnMin");
+    minBtn_->setText("—");
+    minBtn_->setFixedSize(34, 26);
+    closeBtn_ = new QToolButton(titleBar_);
+    closeBtn_->setObjectName("btnClose");
+    closeBtn_->setText("✕");
+    closeBtn_->setFixedSize(34, 26);
+    connect(minBtn_, &QToolButton::clicked, this, &MainWindow::showMinimized);
+    connect(closeBtn_, &QToolButton::clicked, this, [this] { close(); });
+    tl->addWidget(icon);
+    tl->addWidget(title);
+    tl->addStretch(1);
+    tl->addWidget(minBtn_);
+    tl->addWidget(closeBtn_);
+    setMenuWidget(titleBar_);  // 位于中央区之上，天然排在工具栏上方
+
     input_ = new QLineEdit(this);
     input_->setPlaceholderText("输入关键词…（仅匹配文件名，大小写不敏感；* ? 为通配符）");
+    input_->setMouseTracking(true);
 
     table_ = new QTableWidget(this);
     table_->setColumnCount(4);
@@ -230,6 +339,7 @@ class MainWindow : public QMainWindow {
     table_->setColumnWidth(1, 60);
     table_->setColumnWidth(2, 80);
     table_->setColumnWidth(3, 150);
+    table_->setMouseTracking(true);
 
     auto* central = new QWidget(this);
     auto* lay = new QVBoxLayout(central);
@@ -241,36 +351,35 @@ class MainWindow : public QMainWindow {
 
     statusBar()->showMessage("连接 lsearchd …");
 
-    // ---- Everything 式工具栏 ----
+    // ---- 工具栏（Everything 式操作）----
     auto* tb = addToolBar("工具");
     tb->setMovable(false);
+    tb->setMouseTracking(true);
 
     QAction* rebuildAct = tb->addAction("重建索引");
     rebuildAct->setShortcut(QKeySequence("Ctrl+R"));
-    rebuildAct->setToolTip("全量重建索引 (Ctrl+R)");
-    connect(rebuildAct, &QAction::triggered, this, &MainWindow::doRebuild);
+    connect(rebuildAct, &QAction::triggered, this, [this] { doRebuild(); });
 
     tb->addSeparator();
 
-    // 仅目录 / 仅文件（互斥，可都关 -> 全部）
     dirsAct_ = tb->addAction("仅目录");
     dirsAct_->setCheckable(true);
-    connect(dirsAct_, &QAction::toggled, this, &MainWindow::onFilterChanged);
     filesAct_ = tb->addAction("仅文件");
     filesAct_->setCheckable(true);
-    connect(filesAct_, &QAction::toggled, this, &MainWindow::onFilterChanged);
     connect(dirsAct_, &QAction::toggled, this, [this](bool on) {
       if (on) filesAct_->setChecked(false);
+      onFilterChanged();
     });
     connect(filesAct_, &QAction::toggled, this, [this](bool on) {
       if (on) dirsAct_->setChecked(false);
+      onFilterChanged();
     });
 
     tb->addSeparator();
 
     QAction* statsAct = tb->addAction("索引统计");
     statsAct->setShortcut(QKeySequence("Ctrl+I"));
-    connect(statsAct, &QAction::triggered, this, &MainWindow::showStats);
+    connect(statsAct, &QAction::triggered, this, [this] { showStats(); });
 
     QAction* cfgAct = tb->addAction("打开配置");
     connect(cfgAct, &QAction::triggered, this, [this] {
@@ -294,11 +403,18 @@ class MainWindow : public QMainWindow {
     timer_->setSingleShot(true);
     timer_->setInterval(150);
     connect(timer_, &QTimer::timeout, this, &MainWindow::runSearch);
+
+    // 无边框窗口的鼠标跟踪：标题栏 + 各主要控件
+    titleBar_->installEventFilter(this);
+    input_->installEventFilter(this);
+    table_->installEventFilter(this);
+    tb->installEventFilter(this);
+    central->installEventFilter(this);
   }
 
   void setupTray() {
     if (!QSystemTrayIcon::isSystemTrayAvailable()) {
-      tray_ = nullptr;  // 无托盘环境（如部分 WSLg）：关闭即退出
+      tray_ = nullptr;
       return;
     }
     tray_ = new QSystemTrayIcon(makeAppIcon(), this);
@@ -319,7 +435,6 @@ class MainWindow : public QMainWindow {
             });
     tray_->setContextMenu(menu);
     tray_->show();
-    statusBar()->showMessage("已驻留系统托盘：关闭窗口将最小化到托盘");
   }
 
   void toggleWindow() {
@@ -430,6 +545,9 @@ class MainWindow : public QMainWindow {
     });
   }
 
+  QWidget* titleBar_ = nullptr;
+  QToolButton* minBtn_ = nullptr;
+  QToolButton* closeBtn_ = nullptr;
   QLineEdit* input_ = nullptr;
   QTableWidget* table_ = nullptr;
   QTimer* timer_ = nullptr;
@@ -437,6 +555,12 @@ class MainWindow : public QMainWindow {
   QAction* dirsAct_ = nullptr;
   QAction* filesAct_ = nullptr;
   bool quitting_ = false;
+  bool resizing_ = false;
+  bool dragging_ = false;
+  int edges_ = 0;
+  QPoint pressGlobal_;
+  QPoint dragOffset_;
+  QRect startGeo_;
   bool dirsOnly_ = false;
   bool filesOnly_ = false;
   std::thread worker_;
