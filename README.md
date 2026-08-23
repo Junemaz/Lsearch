@@ -84,8 +84,8 @@ lsearchd 守护进程 ── Unix socket IPC ──┬─ GUI（Qt5，规划中�
 
 ## 路线图
 - [x] V1：lsearchd + CLI + TUI + inotify + SQLite + 单元测试 + 打包脚本
-- [ ] V2：Qt5 GUI（实时搜索框、结果表格、托盘、索引管理页）
-- [ ] V3：正则、排除规则 UI、挂载点选择、多架构（x86_64 / aarch64）交叉编译 CI、D-Bus 集成
+- [x] V2（进行中）：Qt5 GUI —— 实时搜索框、结果表格、双击打开、**系统托盘常驻**、深色现代主题
+- [ ] V2 后续：索引管理页（查看/增删根路径、一键重建）｜V3：正则、多架构 CI、D-Bus
 
 ## 开源参考
 [Fsearch](https://github.com/cboxdoerfer/fsearch)、[fd](https://github.com/sharkdp/fd)、[fzf](https://github.com/junegunn/fzf)、plocate 等（见 architecture 文档）。
