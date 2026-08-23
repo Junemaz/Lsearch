@@ -64,6 +64,24 @@ if(BUILD_TUI)
   endif()
 endif()
 
+# ---- gui (Qt5) ----
+option(BUILD_GUI "Build the Qt5 GUI" ON)
+if(BUILD_GUI)
+  find_package(Qt5 COMPONENTS Widgets QUIET)
+  if(Qt5Widgets_FOUND)
+    add_executable(lsearch-gui gui/main.cpp)
+    target_include_directories(lsearch-gui PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(lsearch-gui PRIVATE lsearch_core lsearch_ipc Qt5::Widgets)
+    set_target_properties(lsearch-gui PROPERTIES
+      AUTOMOC ON
+      CXX_STANDARD 17
+      CXX_STANDARD_REQUIRED ON)
+    install(TARGETS lsearch-gui RUNTIME DESTINATION bin)
+  else()
+    message(WARNING "Qt5 Widgets 未找到，跳过 GUI 构建（apt install qtbase5-dev）")
+  endif()
+endif()
+
 # ---- tests ----
 option(BUILD_TESTS "Build unit tests" ON)
 if(BUILD_TESTS)
