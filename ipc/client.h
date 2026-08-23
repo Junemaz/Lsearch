@@ -30,6 +30,13 @@ class Client {
   // stats：返回 key=value 列表
   bool stats(std::vector<std::pair<std::string, std::string>>& kv, std::string& err);
 
+  // 索引管理
+  // get-config：返回 paths/excludes/hidden/follow/config_file 的 key=value 列表
+  bool getConfig(std::vector<std::pair<std::string, std::string>>& kv, std::string& err);
+  bool setPaths(const std::string& pathsCsv, std::string& err);      // 整体替换根路径
+  bool setExcludes(const std::string& excludesCsv, std::string& err);  // "_" 清空
+  bool setOpts(const std::string& hidden, const std::string& follow, std::string& err);
+
   // 连接，若失败且 spawn 为 true 则自动拉起守护进程并重试
   static bool connectOrSpawn(const std::string& sock, bool spawn, Client& c, std::string& err);
 
@@ -37,6 +44,9 @@ class Client {
   bool writeLine(const std::string& line, std::string& err);
   bool readLine(std::string& line, bool& eof, std::string& err);
   bool ping(std::string& err);
+  // 发送请求并解析 "OK\n key=value... END" 回复
+  bool readKvReply(const std::string& req, std::vector<std::pair<std::string, std::string>>& kv,
+                   std::string& err);
 
   int fd_ = -1;
   std::string recvBuf_;

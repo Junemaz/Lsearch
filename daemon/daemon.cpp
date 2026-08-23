@@ -213,6 +213,43 @@ void Daemon::handleRequest(const std::string& line, std::string& out) {
     }
     restartWatcher();
     out = "OK\n";
+  } else if (cmd == "get-config") {
+    out = "OK\n";
+    out += "paths=" + joinList(cfg_.paths, ",") + "\n";
+    out += "excludes=" + joinList(cfg_.excludes, ",") + "\n";
+    out += "hidden=" + std::string(cfg_.index_hidden ? "1" : "0") + "\n";
+    out += "follow=" + std::string(cfg_.follow_symlinks ? "1" : "0") + "\n";
+    out += "config_file=" + cfg_.config_file + "\n";
+    out += "END\n";
+  } else if (cmd == "set-paths") {
+    // paths 为空拒绝（至少保留一个根目录），csv 逗号分隔
+    auto v = split(arg, ',');
+    if (v.empty()) {
+      out = "ERR paths must not be empty\n";
+    } else {
+      cfg_.paths = std::move(v);
+      cfg_.save(cfg_.config_file);
+      startRebuild();
+      out = "OK\n";
+    }
+  } else if (cmd == "set-excludes") {
+    // 传 "_" 表示清空排除列表
+    cfg_.excludes = (arg == "_") ? std::vector<std::string>{} : split(arg, ',');
+    cfg_.save(cfg_.config_file);
+    startRebuild();
+    out = "OK\n";
+  } else if (cmd == "set-opts") {
+    // set-opts <hidden 0|1> <follow 0|1>
+    auto v = split(arg, ' ');
+    if (v.size() >= 2) {
+      cfg_.index_hidden = (v[0] == "1");
+      cfg_.follow_symlinks = (v[1] == "1");
+      cfg_.save(cfg_.config_file);
+      startRebuild();
+      out = "OK\n";
+    } else {
+      out = "ERR bad opts\n";
+    }
   } else if (cmd == "shutdown") {
     out = "OK\n";
     shutdown();

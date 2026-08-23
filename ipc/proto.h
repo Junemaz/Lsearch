@@ -10,11 +10,15 @@
 //   add-path <path>
 //   remove-path <path>
 //   shutdown
+//   get-config                 ← 返回 paths/excludes/hidden/follow/config_file
+//   set-paths <csv>            ← 整体替换索引根路径（逗号分隔，非空）
+//   set-excludes <csv>         ← 整体替换排除前缀（"_" 表示清空）
+//   set-opts <hidden> <follow> ← 隐藏文件/跟随符号链接（0|1）
 //
 // 响应（守护进程 -> 客户端）：
 //   OK / ERR <msg>                                  —— 单行命令
 //   OK <count>\n<结果行...>\nEND\n                   —— search
-//   OK\n<key=value...>\nEND\n                        —— stats / version
+//   OK\n<key=value...>\nEND\n                        —— stats / version / get-config
 // 结果行格式：path<TAB>is_dir<TAB>size<TAB>mtime<TAB>path_matched
 #include <cstddef>
 #include <string>

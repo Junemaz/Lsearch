@@ -167,8 +167,17 @@ bool Client::search(const std::string& query, SortKey sort, size_t limit,
 }
 
 bool Client::stats(std::vector<std::pair<std::string, std::string>>& kv, std::string& err) {
+  return readKvReply("stats", kv, err);
+}
+
+bool Client::getConfig(std::vector<std::pair<std::string, std::string>>& kv, std::string& err) {
+  return readKvReply("get-config", kv, err);
+}
+
+bool Client::readKvReply(const std::string& req,
+                         std::vector<std::pair<std::string, std::string>>& kv, std::string& err) {
   kv.clear();
-  if (!writeLine("stats", err)) return false;
+  if (!writeLine(req, err)) return false;
   std::string line;
   bool eof = false;
   if (!readLine(line, eof, err)) return false;
@@ -184,6 +193,18 @@ bool Client::stats(std::vector<std::pair<std::string, std::string>>& kv, std::st
     kv.emplace_back(line.substr(0, eq), line.substr(eq + 1));
   }
   return true;
+}
+
+bool Client::setPaths(const std::string& pathsCsv, std::string& err) {
+  return command("set-paths " + pathsCsv, err);
+}
+
+bool Client::setExcludes(const std::string& excludesCsv, std::string& err) {
+  return command("set-excludes " + excludesCsv, err);
+}
+
+bool Client::setOpts(const std::string& hidden, const std::string& follow, std::string& err) {
+  return command("set-opts " + hidden + " " + follow, err);
 }
 
 bool Client::connectOrSpawn(const std::string& sock, bool spawn, Client& c, std::string& err) {

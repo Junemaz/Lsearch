@@ -9,18 +9,23 @@
 #include <QAction>
 #include <QApplication>
 #include <QBrush>
+#include <QCheckBox>
 #include <QCloseEvent>
 #include <QColor>
 #include <QDesktopServices>
+#include <QDialog>
 #include <QDir>
 #include <QEvent>
+#include <QFileDialog>
 #include <QFrame>
+#include <QGroupBox>
 #include <QHeaderView>
 #include <QHBoxLayout>
 #include <QIcon>
 #include <QKeySequence>
 #include <QLabel>
 #include <QLineEdit>
+#include <QListWidget>
 #include <QMainWindow>
 #include <QMenu>
 #include <QMessageBox>
@@ -29,6 +34,7 @@
 #include <QPalette>
 #include <QPixmap>
 #include <QProcess>
+#include <QPushButton>
 #include <QStatusBar>
 #include <QSystemTrayIcon>
 #include <QTableWidget>
@@ -159,6 +165,221 @@ void applyModernTheme(QApplication& app) {
 }
 
 }  // namespace
+
+// 索引管理对话框：增删根路径 / 排除前缀 / 选项，直接走守护进程 IPC 生效并重建
+class IndexManageDialog : public QDialog {
+  Q_OBJECT
+
+ public:
+  explicit IndexManageDialog(QWidget* parent = nullptr) : QDialog(parent) {
+    setWindowTitle("索引管理");
+    setWindowFlags(Qt::Dialog | Qt::FramelessWindowHint);
+    setFixedSize(580, 480);
+    setWindowIcon(makeAppIcon());
+
+    // 自绘小标题栏（可拖动）
+    header_ = new QWidget(this);
+    header_->setObjectName("titleBar");
+    header_->setFixedHeight(36);
+    auto* hl = new QHBoxLayout(header_);
+    hl->setContentsMargins(12, 0, 6, 0);
+    auto* ht = new QLabel("索引管理", header_);
+    ht->setObjectName("titleText");
+    auto* hclose = new QToolButton(header_);
+    hclose->setObjectName("btnClose");
+    hclose->setText("✕");
+    hclose->setFixedSize(30, 22);
+    connect(hclose, &QToolButton::clicked, this, &QDialog::reject);
+    hl->addWidget(ht);
+    hl->addStretch(1);
+    hl->addWidget(hclose);
+    header_->installEventFilter(this);
+
+    // 根路径
+    auto* pathGroup = new QGroupBox("索引根路径", this);
+    pathsList_ = new QListWidget(pathGroup);
+    auto* pathBtns = new QVBoxLayout;
+    addPathBtn_ = new QPushButton("添加目录…", pathGroup);
+    delPathBtn_ = new QPushButton("删除", pathGroup);
+    pathBtns->addWidget(addPathBtn_);
+    pathBtns->addWidget(delPathBtn_);
+    pathBtns->addStretch(1);
+    auto* pathRow = new QHBoxLayout(pathGroup);
+    pathRow->addWidget(pathsList_);
+    pathRow->addLayout(pathBtns);
+
+    // 排除前缀
+    auto* exclGroup = new QGroupBox("排除路径（前缀匹配，含其下所有内容）", this);
+    exclList_ = new QListWidget(exclGroup);
+    exclEdit_ = new QLineEdit(exclGroup);
+    exclEdit_->setPlaceholderText("输入要排除的路径前缀，回车添加");
+    auto* exclBtns = new QVBoxLayout;
+    addExclBtn_ = new QPushButton("添加", exclGroup);
+    delExclBtn_ = new QPushButton("删除", exclGroup);
+    exclBtns->addWidget(addExclBtn_);
+    exclBtns->addWidget(delExclBtn_);
+    exclBtns->addStretch(1);
+    auto* exclRow = new QHBoxLayout(exclGroup);
+    auto* exclCol = new QVBoxLayout;
+    exclCol->addWidget(exclEdit_);
+    exclCol->addWidget(exclList_);
+    exclRow->addLayout(exclCol);
+    exclRow->addLayout(exclBtns);
+
+    // 选项
+    auto* optGroup = new QGroupBox("选项", this);
+    hiddenChk_ = new QCheckBox("索引隐藏文件/目录（以 . 开头）", optGroup);
+    followChk_ = new QCheckBox("跟随符号链接", optGroup);
+    auto* ol = new QVBoxLayout(optGroup);
+    ol->addWidget(hiddenChk_);
+    ol->addWidget(followChk_);
+    ol->addWidget(new QLabel("修改后点「应用并重建」生效，会全量重扫。", optGroup));
+
+    // 底部按钮
+    applyBtn_ = new QPushButton("应用并重建", this);
+    rebuildBtn_ = new QPushButton("立即重建", this);
+    closeBtn_ = new QPushButton("关闭", this);
+    auto* foot = new QHBoxLayout;
+    foot->addStretch(1);
+    foot->addWidget(applyBtn_);
+    foot->addWidget(rebuildBtn_);
+    foot->addWidget(closeBtn_);
+
+    auto* root = new QVBoxLayout(this);
+    root->setContentsMargins(0, 0, 0, 0);
+    root->setSpacing(0);
+    auto* body = new QVBoxLayout;
+    body->setContentsMargins(12, 8, 12, 8);
+    body->setSpacing(8);
+    body->addWidget(pathGroup);
+    body->addWidget(exclGroup);
+    body->addWidget(optGroup);
+    body->addLayout(foot);
+    root->addWidget(header_);
+    root->addLayout(body);
+
+    connect(addPathBtn_, &QPushButton::clicked, this, [this] {
+      QString dir = QFileDialog::getExistingDirectory(this, "选择要索引的目录");
+      if (!dir.isEmpty() && pathsList_->findItems(dir, Qt::MatchExactly).isEmpty())
+        pathsList_->addItem(dir);
+    });
+    connect(delPathBtn_, &QPushButton::clicked, this, [this] { deleteSelected(pathsList_); });
+    connect(addExclBtn_, &QPushButton::clicked, this, [this] { addExclFromEdit(); });
+    connect(exclEdit_, &QLineEdit::returnPressed, this, [this] { addExclFromEdit(); });
+    connect(delExclBtn_, &QPushButton::clicked, this, [this] { deleteSelected(exclList_); });
+    connect(applyBtn_, &QPushButton::clicked, this, [this] { apply(); });
+    connect(rebuildBtn_, &QPushButton::clicked, this, [this] { triggerRebuild(); });
+    connect(closeBtn_, &QPushButton::clicked, this, &QDialog::reject);
+
+    loadConfig();
+  }
+
+  bool eventFilter(QObject* o, QEvent* e) override {
+    if (o == header_ && e->type() == QEvent::MouseButtonPress) {
+      auto* m = static_cast<QMouseEvent*>(e);
+      if (m->button() == Qt::LeftButton) {
+        dragging_ = true;
+        dragOffset_ = m->globalPos() - frameGeometry().topLeft();
+        return true;
+      }
+    } else if (o == header_ && e->type() == QEvent::MouseMove) {
+      auto* m = static_cast<QMouseEvent*>(e);
+      if (dragging_ && (m->buttons() & Qt::LeftButton)) {
+        move(m->globalPos() - dragOffset_);
+        return true;
+      }
+    } else if (o == header_ && e->type() == QEvent::MouseButtonRelease) {
+      if (dragging_) { dragging_ = false; return true; }
+    }
+    return QDialog::eventFilter(o, e);
+  }
+
+ private:
+  void loadConfig() {
+    lsearch::Client c;
+    std::string err;
+    if (!lsearch::Client::connectOrSpawn(lsearch::Config::load("").sock_path, true, c, err)) {
+      QMessageBox::warning(this, "索引管理", "无法连接 lsearchd: " + QString::fromStdString(err));
+      return;
+    }
+    std::vector<std::pair<std::string, std::string>> kv;
+    if (!c.getConfig(kv, err)) {
+      QMessageBox::warning(this, "索引管理", "读取配置失败: " + QString::fromStdString(err));
+      return;
+    }
+    QString paths, excludes, hidden, follow;
+    for (auto& [k, v] : kv) {
+      if (k == "paths") paths = QString::fromStdString(v);
+      else if (k == "excludes") excludes = QString::fromStdString(v);
+      else if (k == "hidden") hidden = QString::fromStdString(v);
+      else if (k == "follow") follow = QString::fromStdString(v);
+    }
+    for (const auto& p : paths.split(',', Qt::SkipEmptyParts)) pathsList_->addItem(p.trimmed());
+    for (const auto& p : excludes.split(',', Qt::SkipEmptyParts)) exclList_->addItem(p.trimmed());
+    hiddenChk_->setChecked(hidden == "1");
+    followChk_->setChecked(follow == "1");
+  }
+
+  QStringList collect(QListWidget* w) const {
+    QStringList out;
+    for (int i = 0; i < w->count(); ++i) out << w->item(i)->text().trimmed();
+    return out;
+  }
+
+  void addExclFromEdit() {
+    QString t = exclEdit_->text().trimmed();
+    if (!t.isEmpty() && exclList_->findItems(t, Qt::MatchExactly).isEmpty()) exclList_->addItem(t);
+    exclEdit_->clear();
+  }
+
+  void deleteSelected(QListWidget* w) {
+    for (auto* it : w->selectedItems()) delete it;
+  }
+
+  void apply() {
+    QString pathsCsv = collect(pathsList_).join(',');
+    QString exclCsv = collect(exclList_).join(',');
+    if (exclCsv.isEmpty()) exclCsv = "_";
+    lsearch::Client c;
+    std::string err;
+    if (!lsearch::Client::connectOrSpawn(lsearch::Config::load("").sock_path, true, c, err)) {
+      QMessageBox::warning(this, "索引管理", "无法连接 lsearchd: " + QString::fromStdString(err));
+      return;
+    }
+    if (!c.setPaths(pathsCsv.toStdString(), err) || !c.setExcludes(exclCsv.toStdString(), err) ||
+        !c.setOpts(hiddenChk_->isChecked() ? "1" : "0", followChk_->isChecked() ? "1" : "0", err)) {
+      QMessageBox::warning(this, "索引管理", "保存失败: " + QString::fromStdString(err));
+      return;
+    }
+    QMessageBox::information(this, "索引管理", "配置已保存，正在后台重建索引…");
+  }
+
+  void triggerRebuild() {
+    std::thread([] {
+      lsearch::Client c;
+      std::string err;
+      if (lsearch::Client::connectOrSpawn(lsearch::Config::load("").sock_path, true, c, err))
+        c.command("rebuild", err);
+    }).detach();
+    QMessageBox::information(this, "索引管理", "已触发重建，正在后台执行…");
+  }
+
+  QWidget* header_ = nullptr;
+  QListWidget* pathsList_ = nullptr;
+  QListWidget* exclList_ = nullptr;
+  QLineEdit* exclEdit_ = nullptr;
+  QPushButton* addPathBtn_ = nullptr;
+  QPushButton* delPathBtn_ = nullptr;
+  QPushButton* addExclBtn_ = nullptr;
+  QPushButton* delExclBtn_ = nullptr;
+  QPushButton* applyBtn_ = nullptr;
+  QPushButton* rebuildBtn_ = nullptr;
+  QPushButton* closeBtn_ = nullptr;
+  QCheckBox* hiddenChk_ = nullptr;
+  QCheckBox* followChk_ = nullptr;
+  bool dragging_ = false;
+  QPoint dragOffset_;
+};
 
 class MainWindow : public QMainWindow {
   Q_OBJECT
@@ -386,6 +607,14 @@ class MainWindow : public QMainWindow {
       std::string f = lsearch::Config::load("").config_file;
       QDir dir(QString::fromStdString(lsearch::dirName(f)));
       QDesktopServices::openUrl(QUrl::fromLocalFile(dir.path()));
+    });
+
+    QAction* mgrAct = tb->addAction("索引管理");
+    mgrAct->setToolTip("增删索引根路径 / 排除规则 / 选项");
+    connect(mgrAct, &QAction::triggered, this, [this] {
+      IndexManageDialog dlg(this);
+      dlg.exec();
+      runSearch();  // 应用后刷新当前结果
     });
 
     tb->addSeparator();
