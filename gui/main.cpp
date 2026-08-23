@@ -26,8 +26,10 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QLocale>
 #include <QMainWindow>
 #include <QMenu>
+#include <QMenuBar>
 #include <QMessageBox>
 #include <QMouseEvent>
 #include <QPainter>
@@ -159,6 +161,14 @@ void applyModernTheme(QApplication& app) {
     QMenu::item { padding: 6px 20px; border-radius: 4px; }
     QMenu::item:selected { background: #2c456e; color: #ffffff; }
     QMenu::separator { background: #333c4e; height: 1px; margin: 4px 8px; }
+    QMenuBar {
+      background: #232b3b; color: #e8eaf0;
+      border: none; border-bottom: 1px solid #333c4e;
+      padding: 0; margin: 0;
+    }
+    QMenuBar::item { padding: 5px 12px; background: transparent; border-radius: 4px; }
+    QMenuBar::item:selected { background: #2c456e; color: #ffffff; }
+    QMenuBar::item:pressed { background: #2c456e; }
     QToolTip { background: #232b3b; color: #e8eaf0; border: 1px solid #333c4e; }
     QLabel { color: #e8eaf0; }
   )");
@@ -549,7 +559,44 @@ class MainWindow : public QMainWindow {
     tl->addStretch(1);
     tl->addWidget(minBtn_);
     tl->addWidget(closeBtn_);
-    setMenuWidget(titleBar_);  // 位于中央区之上，天然排在工具栏上方
+
+    // 菜单栏（标题栏下方一行；Windows 惯例：文件/工具/帮助）
+    menubar_ = new QMenuBar(this);
+    menubar_->setObjectName("mainMenu");
+    auto* fileMenu = menubar_->addMenu("文件");
+    QAction* quitAct = fileMenu->addAction("退出");
+    quitAct->setShortcut(QKeySequence("Ctrl+Q"));
+    connect(quitAct, &QAction::triggered, this, [this] { quitApp(); });
+
+    auto* toolsMenu = menubar_->addMenu("工具");
+    QAction* mRebuild = toolsMenu->addAction("重建索引");
+    mRebuild->setShortcut(QKeySequence("Ctrl+R"));
+    connect(mRebuild, &QAction::triggered, this, [this] { doRebuild(); });
+    QAction* mManage = toolsMenu->addAction("索引管理");
+    mManage->setShortcut(QKeySequence("Ctrl+M"));
+    connect(mManage, &QAction::triggered, this, [this] { openManage(); });
+    QAction* mStats = toolsMenu->addAction("索引统计");
+    mStats->setShortcut(QKeySequence("Ctrl+I"));
+    connect(mStats, &QAction::triggered, this, [this] { showStats(); });
+    toolsMenu->addSeparator();
+    QAction* mConfig = toolsMenu->addAction("打开配置文件目录");
+    connect(mConfig, &QAction::triggered, this, [this] { openConfigDir(); });
+
+    auto* helpMenu = menubar_->addMenu("帮助");
+    connect(helpMenu->addAction("关于 Lsearch"), &QAction::triggered, this, [this] {
+      QMessageBox::about(this, "关于 Lsearch",
+                         "Lsearch 0.1.0\n\nEverything 风格的文件名搜索（麒麟/信创桌面）。\n"
+                         "守护进程 lsearchd + CLI/TUI/GUI 多前端。");
+    });
+
+    headerCont_ = new QWidget(this);
+    headerCont_->setObjectName("titleBar");
+    auto* hc = new QVBoxLayout(headerCont_);
+    hc->setContentsMargins(0, 0, 0, 0);
+    hc->setSpacing(0);
+    hc->addWidget(titleBar_);
+    hc->addWidget(menubar_);
+    setMenuWidget(headerCont_);  // 标题栏 + 菜单栏整体位于中央区之上
 
     input_ = new QLineEdit(this);
     input_->setPlaceholderText("输入关键词…（仅匹配文件名，大小写不敏感；* ? 为通配符）");
@@ -582,7 +629,7 @@ class MainWindow : public QMainWindow {
 
     statusBar()->showMessage("连接 lsearchd …");
 
-    // ---- 工具栏（Everything 式操作）----
+    // ---- 工具栏（仅保留高频操作；其余进菜单）----
     auto* tb = addToolBar("工具");
     tb->setMovable(false);
     tb->setMouseTracking(true);
@@ -606,35 +653,6 @@ class MainWindow : public QMainWindow {
       onFilterChanged();
     });
 
-    tb->addSeparator();
-
-    QAction* statsAct = tb->addAction("索引统计");
-    statsAct->setShortcut(QKeySequence("Ctrl+I"));
-    connect(statsAct, &QAction::triggered, this, [this] { showStats(); });
-
-    QAction* cfgAct = tb->addAction("打开配置");
-    connect(cfgAct, &QAction::triggered, this, [this] {
-      std::string f = lsearch::Config::load("").config_file;
-      QDir dir(QString::fromStdString(lsearch::dirName(f)));
-      QDesktopServices::openUrl(QUrl::fromLocalFile(dir.path()));
-    });
-
-    QAction* mgrAct = tb->addAction("索引管理");
-    mgrAct->setToolTip("增删索引根路径 / 排除规则 / 选项");
-    connect(mgrAct, &QAction::triggered, this, [this] {
-      IndexManageDialog dlg(this);
-      dlg.exec();
-      runSearch();  // 应用后刷新当前结果
-    });
-
-    tb->addSeparator();
-    QAction* exitAct = tb->addAction("退出");
-    connect(exitAct, &QAction::triggered, this, [this] {
-      quitting_ = true;
-      if (tray_) tray_->hide();
-      QApplication::quit();
-    });
-
     connect(input_, &QLineEdit::textChanged, this, &MainWindow::onQueryChanged);
     connect(table_, &QTableWidget::cellDoubleClicked, this, &MainWindow::onOpen);
 
@@ -643,8 +661,18 @@ class MainWindow : public QMainWindow {
     timer_->setInterval(150);
     connect(timer_, &QTimer::timeout, this, &MainWindow::runSearch);
 
+    // ---- 重建进度：状态栏右侧常驻标签 + 每秒轮询 ----
+    rebuildLabel_ = new QLabel("", this);
+    rebuildLabel_->setStyleSheet("color:#9aa7bd;padding:0 8px;");
+    statusBar()->addPermanentWidget(rebuildLabel_);
+    pollTimer_ = new QTimer(this);
+    pollTimer_->setInterval(1000);
+    connect(pollTimer_, &QTimer::timeout, this, &MainWindow::pollRebuild);
+    pollTimer_->start();
+
     // 无边框窗口的鼠标跟踪：标题栏 + 各主要控件
     titleBar_->installEventFilter(this);
+    menubar_->installEventFilter(this);
     input_->installEventFilter(this);
     table_->installEventFilter(this);
     tb->installEventFilter(this);
@@ -688,6 +716,60 @@ class MainWindow : public QMainWindow {
       if (lsearch::Client::connectOrSpawn(lsearch::Config::load("").sock_path, true, c, err))
         c.command("rebuild", err);
     }).detach();
+  }
+
+  void quitApp() {
+    quitting_ = true;
+    if (tray_) tray_->hide();
+    QApplication::quit();
+  }
+
+  void openManage() {
+    IndexManageDialog dlg(this);
+    dlg.exec();
+    runSearch();  // 应用后刷新当前结果
+  }
+
+  void openConfigDir() {
+    std::string f = lsearch::Config::load("").config_file;
+    QDir dir(QString::fromStdString(lsearch::dirName(f)));
+    QDesktopServices::openUrl(QUrl::fromLocalFile(dir.path()));
+  }
+
+  // 每 1 秒轮询 stats：重建时显示进度，完成时显示结果片刻后清除
+  void pollRebuild() {
+    std::string err;
+    if (!pollClient_.connected() && !pollClient_.connect(lsearch::Config::load("").sock_path, err)) {
+      QMetaObject::invokeMethod(this, [this] { rebuildLabel_->clear(); });
+      return;
+    }
+    std::vector<std::pair<std::string, std::string>> kv;
+    if (!pollClient_.stats(kv, err)) {
+      pollClient_.close();
+      QMetaObject::invokeMethod(this, [this] { rebuildLabel_->clear(); });
+      return;
+    }
+    bool rebuilding = false;
+    uint64_t sf = 0, files = 0;
+    for (auto& [k, v] : kv) {
+      if (k == "rebuilding") rebuilding = (v == "1");
+      else if (k == "scan_files") sf = static_cast<uint64_t>(atoll(v.c_str()));
+      else if (k == "files") files = static_cast<uint64_t>(atoll(v.c_str()));
+    }
+    QMetaObject::invokeMethod(this, [this, rebuilding, sf, files] {
+      if (rebuilding) {
+        wasRebuilding_ = true;
+        rebuildLabel_->setText(QString("⏳ 正在重建索引… 已扫 %1 项")
+                                   .arg(QLocale().toString(static_cast<qlonglong>(sf))));
+      } else if (wasRebuilding_) {
+        wasRebuilding_ = false;
+        rebuildLabel_->setText(QString("✓ 重建完成，共 %1 条")
+                                   .arg(QLocale().toString(static_cast<qlonglong>(files))));
+        QTimer::singleShot(5000, this, [this] { rebuildLabel_->clear(); });
+      } else {
+        rebuildLabel_->clear();
+      }
+    });
   }
 
   void onFilterChanged() {
@@ -792,11 +874,17 @@ class MainWindow : public QMainWindow {
   }
 
   QWidget* titleBar_ = nullptr;
+  QWidget* headerCont_ = nullptr;
+  QMenuBar* menubar_ = nullptr;
   QToolButton* minBtn_ = nullptr;
   QToolButton* closeBtn_ = nullptr;
   QLineEdit* input_ = nullptr;
   QTableWidget* table_ = nullptr;
   QTimer* timer_ = nullptr;
+  QTimer* pollTimer_ = nullptr;
+  QLabel* rebuildLabel_ = nullptr;
+  bool wasRebuilding_ = false;
+  lsearch::Client pollClient_;
   QSystemTrayIcon* tray_ = nullptr;
   QAction* dirsAct_ = nullptr;
   QAction* filesAct_ = nullptr;

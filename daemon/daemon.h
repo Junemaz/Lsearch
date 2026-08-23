@@ -56,6 +56,9 @@ class Daemon {
   std::atomic<bool> running_{true};
   std::atomic<int64_t> startedAt_{0};
   std::atomic<bool> rebuilding_{false};
+  // 重建进度（供 stats 轮询）：扫描中的文件/目录计数
+  std::atomic<uint64_t> scanFiles_{0};
+  std::atomic<uint64_t> scanDirs_{0};
   std::mutex rebuildM_;
 
   // 活动连接跟踪（确保 shutdown 时不产生悬空引用 / 不泄漏线程）

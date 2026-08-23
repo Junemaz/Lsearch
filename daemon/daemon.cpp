@@ -49,8 +49,12 @@ void Daemon::applyWatch(const WatchEvent& ev) {
 }
 
 bool Daemon::doFullScan() {
+  scanFiles_ = 0;
+  scanDirs_ = 0;
   std::vector<FileEntry> entries;
-  fullScan(cfg_, entries, [](const ScanStats& s) {
+  fullScan(cfg_, entries, [this](const ScanStats& s) {
+    scanFiles_ = s.files.load();
+    scanDirs_ = s.dirs.load();
     fprintf(stderr, "[lsearchd] scanning: files=%llu dirs=%llu errors=%llu\n",
             static_cast<unsigned long long>(s.files.load()),
             static_cast<unsigned long long>(s.dirs.load()),
@@ -188,6 +192,8 @@ void Daemon::handleRequest(const std::string& line, std::string& out) {
     }
     out += "roots=" + roots + "\n";
     out += "rebuilding=" + std::string(rebuilding_ ? "1" : "0") + "\n";
+    out += "scan_files=" + std::to_string(scanFiles_.load()) + "\n";
+    out += "scan_dirs=" + std::to_string(scanDirs_.load()) + "\n";
     out += "END\n";
   } else if (cmd == "search") {
     buildSearchResponse(line, out);
