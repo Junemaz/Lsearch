@@ -90,6 +90,10 @@ QIcon makeAppIcon() {
 void applyModernTheme(QApplication& app) {
   app.setStyle("Fusion");
 
+  // 关掉菜单退隐/动画：显隐即时完成，避免快速切换时新旧菜单短暂重叠
+  app.setEffectEnabled(Qt::UI_FadeMenu, false);
+  app.setEffectEnabled(Qt::UI_AnimateMenu, false);
+
   // ---- 浅色（亮色）主题 ----
   QPalette pal;
   const QColor window(244, 246, 248), base(255, 255, 255), alt(248, 250, 252);
@@ -486,7 +490,8 @@ class MainWindow : public QMainWindow {
     return -1;
   }
 
-  // 打开第 i 个菜单（先同步关闭其它菜单，杜绝同时两开/闪现叠加）
+  // 打开第 i 个菜单：先同步关闭其它菜单，并把 hide 立即冲刷到窗口系统，
+  // 确保旧菜单先真正消失、再弹新的（杜绝两个菜单同时显示）
   void openMenuAt(int i) {
     if (i < 0 || i >= static_cast<int>(menuBtns_.size())) return;
     if (activeMenu_ == i && menuMenus_[i]->isVisible()) {
@@ -494,6 +499,7 @@ class MainWindow : public QMainWindow {
       return;
     }
     closeAllMenus();
+    QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);  // 提交 hide
     activeMenu_ = i;
     QToolButton* b = menuBtns_[i];
     menuMenus_[i]->popup(b->mapToGlobal(QPoint(0, b->height() + 2)));
