@@ -22,7 +22,7 @@ NTFS 的 MFT + USN 日志——文件名索引由文件系统免费维护。Linu
                                │ Unix domain socket（明文行协议）
         ┌──────────────────────┼──────────────────────┐
         ▼                      ▼                      ▼
-   CLI (lsearch)          TUI (lsearch-tui)      GUI (Qt5, 规划中)
+   CLI (lsearch)          TUI (lsearch-tui)      GUI (Qt5)
 ```
 
 **守护进程 + 多前端**的原因：索引只建一次、实时监控只跑一份，多端共享同一索引；

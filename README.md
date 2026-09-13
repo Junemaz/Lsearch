@@ -73,7 +73,7 @@ follow_symlinks = 0              # 是否跟随符号链接
 
 ## 架构
 ```
-lsearchd 守护进程 ── Unix socket IPC ──┬─ GUI（Qt5，规划中，直接复用 core）
+lsearchd 守护进程 ── Unix socket IPC ──┬─ GUI（Qt5，已完成，直接复用 core）
   ├ core/indexer 并行全量遍历           ├─ TUI（ncurses，V1 已交付）
   ├ core/watcher inotify 增量           └─ CLI（lsearch）
   ├ core/db      SQLite 持久化
