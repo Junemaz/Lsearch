@@ -63,7 +63,8 @@ Status: **Done**
   未来修复（若工具将来服务不可信/多用户输入，应单独立规格）：改用线性时间引擎
   （如 RE2）或强模式复杂度守卫。
 - **正则双重编译（接受，不优化）**：daemon 每次 search 先 `validateQuery` 编译一次、
-  匹配时再编译一次；MCP 一页若走 refetch 最多可达 4 次编译。
+  匹配时再编译一次；MCP 一页仅在**旧 daemon 降级路径**走 refetch 时可达 4 次编译
+  （Spec 010 后正常路径用 `search2` 单次查询，无 refetch）。
 - **TUI 正则不发光高亮（接受，不改）**：正则模式下关闭子串高亮以避免误高亮，且不实现
   正则命中高亮。
 - **匹配期异常已防护**：worker 内 `regex_search` 已用 try/catch 包裹，`std::regex_error`
@@ -96,8 +97,8 @@ Then 行为与引入正则前一致
 ## Evidence
 - 构建（C++17，`-Wall -Wextra` 零告警）：
   `cmake --build build -j"$(nproc)"`（强制重编改动文件后 grep warning/error 为空）。
-- 单测 `./build/lsearch_tests` → **334 checks / 0 failures**（首版 218 → 237 → Oracle 修复后 256
-  → 测试去 flaky 后 263 → MCP 互操作修复后 267 → D-Bus 桥接（Spec 009）后 334）。
+- 单测 `./build/lsearch_tests` → **431 checks / 0 failures**（首版 218 → 237 → Oracle 修复后 256
+  → 测试去 flaky 后 263 → MCP 互操作修复后 267 → D-Bus 桥接（Spec 009）后 334 → Spec 010 后 431）。
   新增/相关用例：`search_regex_anchored`（`re:^AnnualReport\d{4}\.txt$` 仅命中
   `AnnualReport2026.txt`）、`search_regex_case_insensitive`（`re:ANNUALREPORT` 命中 2 个）、
   `search_validate_query`（`re:[` 返回 false + 非空 message；空/空白 `re:` 与非 `re:` 查询合法）、
@@ -105,18 +106,20 @@ Then 行为与引入正则前一致
   （`*.p?f` 仍走 glob 命中 `report.pdf`）、`search_regex_pattern_not_lowercased`
   （`re:\W` 不命中 `ABC`、`re:\w` 命中——锁定「pattern 不小写化」不变量）、
   `search_regex_non_ascii_and_icase`（`re:^报告\.txt$` 命中 UTF-8 basename；`re:report`
-  icase 命中 `REPORT`）、`search_regex_paging_prefix`（`re:.` 在 limit≥匹配数下的排序一致性 +
-  limit<匹配数时结果为全量子集）、`mcp_parse_regex_query`（MCP 空 `re:` / 非法 `re:[` → 拒绝）、
+  icase 命中 `REPORT`）、`search_regex_paging_prefix`（`re:.` 经 `searchEx`：匹配数 ≤cap 时
+  `total` 精确、页稳定，`limit<匹配数` 返回**确定前缀**；Spec 010 已由旧「不确定子集」语义改写）、
+  `mcp_parse_regex_query`（MCP 空 `re:` / 非法 `re:[` → 拒绝）、
   `mcp_regex_paging_orthogonal`（cap 取全量前缀经 `paginate` 切片 == 全量排序前缀）。
 - 稳定性：**独立复跑发现 2 个 flaky 用例**（`search_regex_paging_prefix`、
   `mcp_regex_paging_orthogonal` 误设「匹配数 > limit 时引擎返回确定前缀」——与已知限制矛盾）。
-  已改为只断言确定性语义（limit≥匹配数时排序一致；limit<匹配数时仅验证「条数=limit 且全为
+  当时改为只断言确定性语义（limit≥匹配数时排序一致；limit<匹配数时仅验证「条数=limit 且全为
   匹配集子集」；MCP 侧按 cap 取全量再 `paginate`），随后 **20 次连续运行 263/0 全部通过**。
-- 端到端 `./scripts/self-test.sh -s` → **通过 22 项 / 失败 0 项**（首版 19 → 21 → 22）：
+  **Spec 010 再修订**：`search_regex_paging_prefix` 改用 `searchEx`，断言精确 `total` 与确定前缀。
+- 端到端 `./scripts/self-test.sh -s` → **通过 25 项 / 失败 0 项**（Spec 010 后计数；首版 19 → 21 → 22）：
   `re:^AnnualReport\.txt$` 仅输出隔离 HOME 的 `AnnualReport.txt`；`re:[` → 退出码 2 +
   stderr 含 `bad regex`，随后普通查询仍命中（守护进程存活）；空正则 `re:`/`re:   ` 视为
   空查询（退出码 1，非错误 2）。
-- 端到端 `./scripts/self-test-mcp.sh -s` → **通过 29 项 / 失败 0 项**（首版 25 → 27 → 28 → 29）：
+- 端到端 `./scripts/self-test-mcp.sh -s` → **通过 37 项 / 失败 0 项**（Spec 010 后计数；首版 25 → 27 → 28 → 29）：
   `S11a` `search_files{query:'re:^AnnualReport\.txt$'}` 返回 `AnnualReport.txt`；
   `S11b` `search_files{query:'re:['}` → `-32602`；`S11c` `search_files{query:'re:'}` → `-32602`。
 - 回归：既有子串/glob/排序/分页/单例锁/关闭清理用例全部保持通过（见上两条冒烟计数）。

@@ -11,7 +11,7 @@ Lsearch 是一款参考 Windows 版 **Everything** 打造的文件名即时搜�
 ## 特性（V1）
 - 常驻守护进程 `lsearchd`：全量建索引 → SQLite 持久化 → inotify 实时增量 → 内存热索引
 - Unix domain socket IPC（明文协议，可用 ncurses/GUI/CLI 共享，脚本/socat 可调试）
-- CLI：`lsearch <关键词>` 即时输出路径，支持子串/通配符/`re:` 正则、排序、计数、脚本用 `-0`
+- CLI：`lsearch <关键词>` 即时输出路径，支持子串/通配符/`re:` 正则、排序、计数、`--under` 子树过滤、脚本用 `-0`
 - TUI：`lsearch-tui` 输入即搜、方向键浏览、Enter 打开（xdg-open）、F5 重建
 - 默认仅索引用户家目录，简单纯文本配置（`~/.config/lsearch/lsearch.conf`）
 - 自动拉起守护进程：CLI/TUI 连不上 socket 时会自动把 `lsearchd` 拉起来
@@ -33,9 +33,10 @@ lsearchd --foreground            # 前台调试；默认后台守护化
 lsearch report                   # 子串匹配，大小写不敏感
 lsearch '*.pdf'                  # 含 * ? 时切换为通配符
 lsearch 're:^report-\d{4}\.pdf$' # re: 前缀切换为 ECMAScript 正则（大小写不敏感）
-lsearch --count a                # 仅计数
+lsearch --count a                # 仅计数（精确；>5 万时打印下界并在 stderr 提示 capped）
 lsearch -d '报告'                # 只显示目录
 lsearch -s size -S 'log'         # 按大小排序，带详情列
+lsearch --under /data 'report'   # 只在 /data 子树内搜索（realpath 规范化）
 lsearch --stats                  # 索引统计
 
 # 3) 交互界面
@@ -47,13 +48,18 @@ lsearch-tui                      # 输入即搜；↑↓ 选择，Enter 打开�
 ## 自测
 一键自测核心流程（含建索引 / 搜索 / inotify 增量 / 停机补齐 / 关闭）：
 ```bash
-./scripts/self-test.sh          # 自动构建后跑全部 22 项
+./scripts/self-test.sh          # 自动构建后跑全部 25 项
 ./scripts/self-test.sh -s       # 跳过构建，直接用现有 build/
 ```
-MCP 前端自测（stdio JSON-RPC，S1–S11；需 python3）：
+MCP 前端自测（stdio JSON-RPC，S1–S13；需 python3）：
 ```bash
-./scripts/self-test-mcp.sh      # 自动构建后跑全部 29 项
+./scripts/self-test-mcp.sh      # 自动构建后跑全部 37 项
 ./scripts/self-test-mcp.sh -s   # 跳过构建
+```
+IPC 协议自测（Unix socket 原始协议，P1–P13；需 python3）：
+```bash
+./scripts/self-test-ipc.sh      # 自动构建后跑全部 13 项
+./scripts/self-test-ipc.sh -s   # 跳过构建
 ```
 D-Bus 桥接自测（`dbus-run-session` + `gdbus`，D1–D22；需 dbus-utils）：
 ```bash
@@ -90,7 +96,7 @@ lsearchd 守护进程 ── Unix socket IPC ──┬─ GUI（Qt5，已完成�
 - 守护进程离线期间的改动不自动追平（默认幂等：重启加载 SQLite，可 F5 重建）
 - inotify 有 watch 上限：目录极多时需调高
   `/proc/sys/fs/inotify/max_user_watches`，否则仅告警不阻塞
-- 匹配仅针对**最终文件/文件夹名（basename）**做子串/通配符/`re:` 正则（完整路径不参与命中）；全文内容搜索不在范围
+- 匹配仅针对**最终文件/文件夹名（basename）**做子串/通配符/`re:` 正则（完整路径不参与命中）；全文内容搜索不在范围；可用 `--under PATH` 限定路径子树（Spec 010）
 - `re:` 支持 ECMAScript 正则；病态模式可能长时间占用搜索线程（本地 DoS），仅影响本机查询（详见 [Spec 008](docs/specs/008-regex.md#已知限制)）
 - TUI 需在真实终端（SSH/本地控制台）运行
 
@@ -100,6 +106,7 @@ lsearchd 守护进程 ── Unix socket IPC ──┬─ GUI（Qt5，已完成�
 - [x] V2：索引管理页 —— GUI 内增删索引根路径/排除前缀/选项（隐藏文件、符号链接）、一键重建
 - [x] V3：正则（`re:` 前缀，ECMAScript，大小写不敏感）
 - [x] V3：D-Bus 集成（`lsearch-dbus` 会话总线门面 + 按需激活）
+- [x] V3：检索协议 v2（`search2`/`count2`/`capabilities` + `under` 子树过滤，精确 total/cap 语义）
 - [ ] V3：多架构 CI
 
 ## 开源参考

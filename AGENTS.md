@@ -12,7 +12,7 @@ Lsearch：面向麒麟桌面的 Everything 风格文件名搜索。
 1. 开工前阅读 [docs/specs/README.md](docs/specs/README.md)，看相关 `docs/specs/NNN-*.md`。
 2. 新需求先写一张规格（Proposed），再实现；实现后把单测/冒烟结果填入该规格的
    `## Evidence`，并将状态改为 Done。
-3. 单测入口：`cmake --build build && ./build/lsearch_tests`（当前 334 checks / 0 failures）。
+3. 单测入口：`cmake --build build && ./build/lsearch_tests`（当前 431 checks / 0 failures）。
 4. 端到端：守护进程与 CLI 必须在**同一条 shell 命令**里运行（本沙箱 /tmp 是每条命令
    独立的 tmpfs，后台进程随容器回收）；用隔离的 `HOME/XDG_*` 指向工作区下临时目录。
 

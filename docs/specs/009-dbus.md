@@ -115,7 +115,7 @@ Then 桥接退出 0
   `cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j"$(nproc)"`（`--clean-first` 全量重建无告警）。
   产物 `build/lsearch-dbus`；纯逻辑静态库 `lsearch_dbus_lib`（`dbus/logic.cpp`，不依赖 libdbus，
   可无总线单测）；service 文件经 `configure_file` 生成（`CMAKE_INSTALL_FULL_BINDIR` 展开，不硬编码）。
-- 单测 `./build/lsearch_tests` → **334 checks / 0 failures**（Spec 009 新增 67 checks，8 例：
+- 单测 `./build/lsearch_tests` → **431 checks / 0 failures**（Spec 010 后计数；本规格新增 67 checks，8 例：
   `dbus_make_search_args_valid`、`dbus_make_search_args_whitelist`、
   `dbus_make_search_args_control_chars`、`dbus_make_search_args_limit_offset_clamp`、
   `dbus_make_search_args_empty_and_regex`、`dbus_map_stats_types`、`dbus_map_stats_missing_keys`、
@@ -132,7 +132,7 @@ Then 桥接退出 0
     D16 之后 `lsearchd` 仍存活（换行注入防护，MUST）；
   - D17–D20 `kill` 桥接后再次调用成功（重新激活），新桥接 PID ≠ 旧，且 `lsearchd` PID 集合不变；
   - D21/D22 `Rebuild` 首次触发成功、5s 内再次调用 → `com.lsearch.Error.Busy`（桥接侧节流）。
-- 回归：`./scripts/self-test.sh -s` → 22/22；`./scripts/self-test-mcp.sh -s` → 29/29。
+- 回归（Spec 010 后计数）：`./scripts/self-test.sh -s` → 25/25；`./scripts/self-test-mcp.sh -s` → 37/37。
 - 打包实测：deb `dpkg-deb -c` 含 `./usr/bin/lsearch-dbus` 与
   `./usr/share/dbus-1/services/com.lsearch.Daemon.service`，`dpkg-deb -I` Depends 含 `libdbus-1-3`；
   rpm `rpm -qlp` 含 `/usr/bin/lsearch-dbus` + service，`rpm -qpR` 含 `dbus-libs`。
