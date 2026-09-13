@@ -16,6 +16,9 @@ packaging/*.rpm
 # CodeGraph semantic index (local, machine-specific)
 .codegraph/
 
+# omo 本地状态（run-continuation 等，不应提交）
+.omo/
+
 # LSP 本地缓存（clangd 索引等，machine-specific）
 .cache/
 
