@@ -56,9 +56,9 @@ MCP 前端自测（stdio JSON-RPC，S1–S13；需 python3）：
 ./scripts/self-test-mcp.sh      # 自动构建后跑全部 37 项
 ./scripts/self-test-mcp.sh -s   # 跳过构建
 ```
-IPC 协议自测（Unix socket 原始协议，P1–P13；需 python3）：
+IPC 协议自测（Unix socket 原始协议，P1–P18；需 python3）：
 ```bash
-./scripts/self-test-ipc.sh      # 自动构建后跑全部 13 项
+./scripts/self-test-ipc.sh      # 自动构建后跑全部 18 项
 ./scripts/self-test-ipc.sh -s   # 跳过构建
 ```
 D-Bus 桥接自测（`dbus-run-session` + `gdbus`，D1–D22；需 dbus-utils）：

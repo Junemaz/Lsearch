@@ -115,7 +115,7 @@ Then 桥接退出 0
   `cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j"$(nproc)"`（`--clean-first` 全量重建无告警）。
   产物 `build/lsearch-dbus`；纯逻辑静态库 `lsearch_dbus_lib`（`dbus/logic.cpp`，不依赖 libdbus，
   可无总线单测）；service 文件经 `configure_file` 生成（`CMAKE_INSTALL_FULL_BINDIR` 展开，不硬编码）。
-- 单测 `./build/lsearch_tests` → **431 checks / 0 failures**（Spec 010 后计数；本规格新增 67 checks，8 例：
+- 单测 `./build/lsearch_tests` → **481 checks / 0 failures**（Spec 010 后计数；本规格新增 67 checks，8 例：
   `dbus_make_search_args_valid`、`dbus_make_search_args_whitelist`、
   `dbus_make_search_args_control_chars`、`dbus_make_search_args_limit_offset_clamp`、
   `dbus_make_search_args_empty_and_regex`、`dbus_map_stats_types`、`dbus_map_stats_missing_keys`、

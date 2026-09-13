@@ -52,7 +52,7 @@ Then `lsearch BrandNewDoc` 回到无结果（退出码 1）
 `core/{indexer,db,watcher,config,util}.{h,cpp}` + `daemon/daemon.{h,cpp}`
 
 ## Evidence
-- 单测（`./build/lsearch_tests`，431 checks / 0 failures；Spec 010 后计数）：
+- 单测（`./build/lsearch_tests`，481 checks / 0 failures；Spec 010 后计数）：
   `index_add_remove`、`index_remove_subtree`、`db_roundtrip`、`config_*`
 - 冒烟（隔离 HOME 实测）：
   - 建索引：`[lsearchd] scan done: 8 entries`；`stats` → files=8 dirs=4

@@ -54,7 +54,10 @@ modern（此时必须同时含 `clientCapabilities`，缺失 → `-32602`）；�
 `page.total` 为真实命中数（>cap 时为下界）、`has_more = !total_capped && offset+returned < total`、
 `truncated`/`total_is_lower_bound` 取自 daemon 的 `total_capped`，capped 时附可操作 `hint`。
 **旧 daemon 降级路径**：沿用「over-fetch `N=offset+limit`（钳制 ≤ 50000）后切片」、
-`has_more=(returned==limit)`、`truncated` 在 over-fetch 命中 cap 时置位。
+`has_more=(returned==limit)`、`truncated` 在 over-fetch 命中 cap 时置位；因 legacy 无真实
+`total`，`page.total=0` 且 `page.total_is_lower_bound=true`（消费者不得把 `total:0` 读成"无命中"）。
+**`under` + 旧 daemon（无 v2）→ 不得静默丢弃**：MCP 返回 `isError:true` + 可操作信息
+（`kUnderUnsupportedMessage`）；仅当 `under` 为空时才走上述 legacy 降级。
 
 #### Requirement 6 — 错误语义
 未知工具 / 参数非法 / 空查询 → JSON-RPC `-32602`；执行失败（daemon 不可达、索引不可用）→
@@ -118,7 +121,7 @@ Then MCP 进程退出 0，且 `lsearchd` 仍可被 CLI 查询（daemon 未被连
 - 构建（C++17，`-Wall -Wextra` 零告警）：
   `cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j"$(nproc)"`
   产物 `build/lsearch-mcp`；静态库 `lsearch_mcp_lib`（`mcp/json.cpp` + `mcp/protocol.cpp`）。
-- 单测 `./build/lsearch_tests` → **431 checks / 0 failures**（Spec 010 后计数；原始 MCP 16 例：
+- 单测 `./build/lsearch_tests` → **481 checks / 0 failures**（Spec 010 后计数；原始 MCP 16 例：
   `mcp_json_escape_roundtrip`、`mcp_json_invalid_utf8_sanitized`、`mcp_json_parse_errors`、
   `mcp_json_surrogate_and_nul`、`mcp_json_depth_limit`、`mcp_json_nonfinite_rejected`、
   `mcp_json_asint_clamp`、`mcp_limit_clamp`、`mcp_overfetch_arithmetic`、`mcp_paginate_slicing`、
@@ -128,7 +131,9 @@ Then MCP 进程退出 0，且 `lsearchd` 仍可被 CLI 查询（daemon 未被连
   隔离 HOME/XDG_*，python3 驱动）：discover 双版本与 resultType；modern tools/list 的
   ttlMs/cacheScope；legacy initialize + `search_files{report}` 命中 AnnualReport.txt；空查询/
   未知工具 -32602；limit=0→1、limit=1000000→200 不洪水；query 含换行 → -32602 且 daemon 存活；
-  page(0,2)∪page(2,2)=全局前 4 且不重叠；offset≥50000 空页+truncated；index_stats files>0 且
+  page(0,2)∪page(2,2)=全局前 4 且不重叠；page.total 精确=6、has_more 边界（0+2<6、末页
+  offset+returned==total→false）、offset≥total 空页且 `truncated=false`；under=docs 仅命中子树且
+  total=1、非法 under（相对/`-`/控制字符）→ -32602；index_stats files>0 且
   roots 含隔离 HOME；无写工具；present-but-invalid `_meta` → -32602；JSON 数组批次 → -32600；
   `id:1e999` → 合法 JSON 响应（-32700）；`ping` → `{}`；超长行 → -32700 且随后仍可服务；
   stdin EOF 退出 0 且 `lsearch -m report` 仍可用；stdout 全为合法 JSON-RPC，日志仅在 stderr；
