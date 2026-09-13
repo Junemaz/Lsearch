@@ -171,3 +171,12 @@ Then MCP 进程退出 0，且 `lsearchd` 仍可被 CLI 查询（daemon 未被连
 
 - 生命周期：对阻塞在 stdin 的进程发送 SIGTERM/SIGINT，均退出码 0 且守护进程存活（手工验证）。
 
+### 协议面外部验证（Spec 011 起）
+按 AGENTS.md「协议表面验证」全局规则，MCP 面的“完成”现包含外部验证器
+（见 [Spec 011](011-test-hardening.md)）：官方 `@modelcontextprotocol/conformance` 0.1.16
+经 supergateway stdio→HTTP 桥对 `lsearch-mcp` 实测——范围内 `server-initialize`、`ping`、
+`tools-list` 通过，其余能力非目标/桥职责场景记录于
+[scripts/mcp-conformance-baseline.yml](../scripts/mcp-conformance-baseline.yml)；
+另有第三方 Inspector CLI 冒烟（tools/list + index_stats）、负形状矩阵（27 项）与
+真实转录回放（`scripts/mcp-trace-wrapper.sh` + `scripts/self-test-mcp-replay.sh`）。
+

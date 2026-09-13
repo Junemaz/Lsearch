@@ -251,3 +251,8 @@ LSEARCH_PERF_SOCK=<ISOLATED>/run/lsearch.sock LSEARCH_PERF_PID=<pid> \
 `docs/specs/010-search-protocol.md`（本文件）、`docs/specs/README.md` 规格总览、`README.md`
 （CLI `--under`、自测计数、新增 IPC 自测）、`docs/architecture.md`（检索语义 under/total/cap）、
 `AGENTS.md` 步骤 3 计数、`docs/specs/001-index-core.md` 计数、Spec 006/007/008/009 计数与已知限制。
+
+### 协议面外部验证（Spec 011）
+本规格的 v2 协议表面（`search2`/`count2`/`under`/精确 total）另由
+[Spec 011](011-test-hardening.md) 的负形状矩阵与转录回放持续覆盖（matrix 27/27、replay 6/6），
+并纳入官方 conformance / Inspector CLI 外部验证制度；IPC 细节证据仍以下方 P1–P18 为准。
