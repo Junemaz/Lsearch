@@ -1,0 +1,3 @@
+[D-BUS Service]
+Name=com.lsearch.Daemon
+Exec=@CMAKE_INSTALL_FULL_BINDIR@/lsearch-dbus
