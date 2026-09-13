@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Lsearch MCP 前端端到端自测（stdio JSON-RPC，S1–S9）
+# Lsearch MCP 前端端到端自测（stdio JSON-RPC，S1–S11）
 #   ./scripts/self-test-mcp.sh        # 自动构建后跑全部
 #   ./scripts/self-test-mcp.sh -s     # 跳过构建，使用现有 build/
 # 说明：守护进程与 MCP 客户端必须处于同一 shell 环境（/tmp 隔离），故全部在此脚本内完成；
@@ -53,7 +53,7 @@ for i in $(seq 1 80); do [ -S "$T/run/lsearch.sock" ] && break; sleep 0.2; done
 sleep 1
 if [ ! -S "$T/run/lsearch.sock" ]; then echo "守护进程未就绪"; exit 1; fi
 
-echo "==> 3/ 驱动 MCP（S1–S9）"
+echo "==> 3/ 驱动 MCP（S1–S11）"
 cat > "$T/driver.py" <<'PYEOF'
 import json, os, subprocess, sys
 
@@ -227,6 +227,30 @@ try:
     (ok if okv else bad)("S6", "index_stats files>0 且 roots 含隔离 HOME" if okv else f"{payload}")
 except Exception as e:
     bad("S6", f"exception: {e}")
+
+# ---- S11: 正则匹配（re: 前缀）----
+try:
+    payload = search_payload(call_search(c, {"query": r"re:^AnnualReport\.txt$"}))
+    names = [x["name"] for x in payload["results"]]
+    okv = names == ["AnnualReport.txt"]
+    (ok if okv else bad)("S11a", "search_files re:^AnnualReport\\.txt$ → AnnualReport.txt"
+                        if okv else f"{names}")
+except Exception as e:
+    bad("S11a", f"exception: {e}")
+
+try:
+    r = call_search(c, {"query": "re:["})
+    okv = errcode(r) == -32602
+    (ok if okv else bad)("S11b", "search_files re:[ → -32602" if okv else f"{r}")
+except Exception as e:
+    bad("S11b", f"exception: {e}")
+
+try:
+    r = call_search(c, {"query": "re:"})
+    okv = errcode(r) == -32602
+    (ok if okv else bad)("S11c", "search_files re: → -32602（空查询规则）" if okv else f"{r}")
+except Exception as e:
+    bad("S11c", f"exception: {e}")
 
 # ---- S7: 只读工具面 ----
 try:

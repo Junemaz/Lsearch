@@ -2,7 +2,7 @@
 # Lsearch 核心流程自测脚本
 #   ./scripts/self-test.sh            # 自动构建后跑全部项
 #   ./scripts/self-test.sh -s         # 跳过重新构建（使用已有 build/）
-# 覆盖：构建+单测 / 建索引 / 搜索(子串·通配符·计数·排序·仅目录) /
+# 覆盖：构建+单测 / 建索引 / 搜索(子串·通配符·正则·计数·排序·仅目录) /
 #       inotify 增量(新建·删除) / 停机期间新增+--rebuild / stats / 关闭清理
 # 说明：守护进程与客户端须在同一进程环境运行，故全部在此脚本内完成。
 set -uo pipefail
@@ -47,6 +47,22 @@ if "$L" -m -d -S deeper 2>/dev/null | head -1 | grep -q "	目录"; then ok "仅�
 if "$L" -m --sort size -S deeper 2>/dev/null | head -1 | grep -q "	目录"; then ok "按大小排序首行=目录"; else bad "按大小排序"; fi
 "$L" -m __nonexistent_xyz__ >/dev/null 2>&1
 [ $? -eq 1 ] && ok "无命中退出码 = 1（脚本友好）" || bad "无命中退出码"
+REHITS="$("$L" -m 're:^AnnualReport\.txt$' 2>/dev/null)"
+if [ "$REHITS" = "$T/home/docs/AnnualReport.txt" ]; then ok "正则 're:^AnnualReport\\.txt$' 仅命中 AnnualReport.txt"; else bad "正则精确匹配（得到：$REHITS）"; fi
+REERR="$("$L" -m 're:[' 2>&1 >/dev/null)"; RERC=$?
+FOLLOW="$("$L" -m report 2>/dev/null | grep -c 'AnnualReport.txt')"
+if [ "$RERC" -eq 2 ] && printf '%s' "$REERR" | grep -q "bad regex" && [ "$FOLLOW" -ge 1 ]; then
+  ok "非法正则 're:[' → 退出码 2 + bad regex，守护进程仍可用"
+else
+  bad "非法正则处理（rc=$RERC, follow=$FOLLOW）"
+fi
+"$L" -m 're:' >/dev/null 2>&1; EMPTY1=$?
+"$L" -m 're:   ' >/dev/null 2>&1; EMPTY2=$?
+if [ "$EMPTY1" -eq 1 ] && [ "$EMPTY2" -eq 1 ]; then
+  ok "空正则 're:'/'re:   ' 视为空查询（退出码 1，非错误 2）"
+else
+  bad "空正则处理（e1=$EMPTY1, e2=$EMPTY2）"
+fi
 
 echo "==> 4/ inotify 实时增量自测"
 echo new > "$T/home/docs/BrandNewDoc.pdf"; sleep 1

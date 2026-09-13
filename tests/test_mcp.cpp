@@ -1,6 +1,7 @@
 #include "test_util.h"
 
 #include "core/entry.h"
+#include "core/search.h"
 #include "mcp/json.h"
 #include "mcp/protocol.h"
 
@@ -389,8 +390,7 @@ TEST(mcp_json_asint_clamp) {
   CHECK_EQ(ninf.dump(), std::string("0"));
 }
 
-TEST(mcp_query_control_chars_rejected) {
-  SearchArgs sa;
+TEST(mcp_query_control_chars_rejected) {  SearchArgs sa;
   std::string err;
   Json inj = Json::object();
   inj.set("query", Json::str("x\nshutdown"));
@@ -408,4 +408,51 @@ TEST(mcp_query_control_chars_rejected) {
   Json good = Json::object();
   good.set("query", Json::str("年度 report"));
   CHECK(parseSearchArgs(good, sa, err));
+}
+
+TEST(mcp_parse_regex_query) {
+  SearchArgs sa;
+  std::string err;
+  Json good = Json::object();
+  good.set("query", Json::str("re:^a.*b$"));
+  CHECK(parseSearchArgs(good, sa, err));
+  CHECK_EQ(sa.query, std::string("re:^a.*b$"));
+
+  Json bad = Json::object();
+  bad.set("query", Json::str("re:["));
+  CHECK(!parseSearchArgs(bad, sa, err));
+
+  Json empty = Json::object();
+  empty.set("query", Json::str("re:"));
+  CHECK(!parseSearchArgs(empty, sa, err));
+
+  Json blank = Json::object();
+  blank.set("query", Json::str("re:   "));
+  CHECK(!parseSearchArgs(blank, sa, err));
+}
+
+TEST(mcp_regex_paging_orthogonal) {
+  // MCP 层对"整页"会回到 cap 取确定全局前缀（见 mcp/main.cpp）；这里模拟该行为再用
+  // paginate 切片，验证与全量查询的排序前缀一致。匹配数 > limit 的子集不确定性不在断言内。
+  std::vector<FileEntry> v;
+  for (int i = 0; i < 6; ++i)
+    v.push_back({"/a/rx_" + std::to_string(i), "rx_" + std::to_string(i), 1, i, false,
+                 static_cast<uint64_t>(i)});
+  Index idx;
+  idx.build(std::move(v));
+  std::vector<SearchResult> full, fetched;
+  bool tr;
+  idx.search("re:.", SortKey::Name, 0, false, false, full, tr);
+  CHECK_EQ(full.size(), (size_t)6);
+  idx.search("re:.", SortKey::Name, 50000, false, false, fetched, tr);  // cap 取全量：确定前缀
+  CHECK_EQ(fetched.size(), (size_t)6);
+
+  Page p0 = paginate(fetched, 0, 2);
+  Page p1 = paginate(fetched, 2, 2);
+  CHECK_EQ(p0.items.size(), (size_t)2);
+  CHECK_EQ(p1.items.size(), (size_t)2);
+  CHECK_EQ(p0.items[0].entry.name, full[0].entry.name);
+  CHECK_EQ(p0.items[1].entry.name, full[1].entry.name);
+  CHECK_EQ(p1.items[0].entry.name, full[2].entry.name);
+  CHECK_EQ(p1.items[1].entry.name, full[3].entry.name);
 }
