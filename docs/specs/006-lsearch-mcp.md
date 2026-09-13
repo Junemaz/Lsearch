@@ -37,7 +37,8 @@ stderr 警告，避免误杀。
 
 #### Requirement 4 — 工具面（只读）
 `search_files(query, limit, offset, sort, kind)`：
-- `query` 必填（basename 子串，含 `*`/`?` 转 glob）；空串 → `-32602`
+- `query` 必填（basename 子串；含 `*`/`?` 转 glob；以 `re:` 开头则按 ECMAScript 正则匹配
+  basename，见 [Spec 008](008-regex.md)）；空串或空的 `re:` → `-32602`
 - `limit` 默认 20、合法区间 [1,200]（越界钳制，不报错）；`offset` ≥ 0
 - `sort ∈ {name,path,size,mtime}`，`kind ∈ {any,files,dirs}`
 
@@ -99,7 +100,7 @@ Then MCP 进程退出 0，且 `lsearchd` 仍可被 CLI 查询（daemon 未被连
 - [x] `mcp/main.cpp`：stdio 循环 + 双代检测 + 工具路由
 - [x] `search_files` / `index_stats`：参数校验、over-fetch 分页、结果编码
 - [x] CMake 目标 + install + README 更新
-- [x] 单测（JSON 转义/参数钳制/切片）+ `scripts/self-test-mcp.sh`（S1–S9）
+- [x] 单测（JSON 转义/参数钳制/切片）+ `scripts/self-test-mcp.sh`（S1–S11）
 - [x] 前置：Spec 007（单例锁）已完成（见 [007-daemon-singleton](007-daemon-singleton.md)）
 
 ## Deliverable
@@ -109,13 +110,13 @@ Then MCP 进程退出 0，且 `lsearchd` 仍可被 CLI 查询（daemon 未被连
 - 构建（C++17，`-Wall -Wextra` 零告警）：
   `cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j"$(nproc)"`
   产物 `build/lsearch-mcp`；静态库 `lsearch_mcp_lib`（`mcp/json.cpp` + `mcp/protocol.cpp`）。
-- 单测 `./build/lsearch_tests` → **218 checks / 0 failures**（新增 16 例：
+- 单测 `./build/lsearch_tests` → **263 checks / 0 failures**（新增 16 例：
   `mcp_json_escape_roundtrip`、`mcp_json_invalid_utf8_sanitized`、`mcp_json_parse_errors`、
   `mcp_json_surrogate_and_nul`、`mcp_json_depth_limit`、`mcp_json_nonfinite_rejected`、
   `mcp_json_asint_clamp`、`mcp_limit_clamp`、`mcp_overfetch_arithmetic`、`mcp_paginate_slicing`、
   `mcp_paginate_cap`、`mcp_cap_truncation`、`mcp_parse_args`、`mcp_query_control_chars_rejected`、
   `mcp_tool_mapping`、`mcp_meta_validation`、`mcp_builders`）。
-- 端到端 `./scripts/self-test-mcp.sh -s` → **通过 25 项 / 失败 0 项**（S1–S10，真实二进制 + 管道 +
+- 端到端 `./scripts/self-test-mcp.sh -s` → **通过 28 项 / 失败 0 项**（S1–S11，真实二进制 + 管道 +
   隔离 HOME/XDG_*，python3 驱动）：discover 双版本与 resultType；modern tools/list 的
   ttlMs/cacheScope；legacy initialize + `search_files{report}` 命中 AnnualReport.txt；空查询/
   未知工具 -32602；limit=0→1、limit=1000000→200 不洪水；query 含换行 → -32602 且 daemon 存活；
@@ -123,7 +124,10 @@ Then MCP 进程退出 0，且 `lsearchd` 仍可被 CLI 查询（daemon 未被连
   roots 含隔离 HOME；无写工具；present-but-invalid `_meta` → -32602；JSON 数组批次 → -32600；
   `id:1e999` → 合法 JSON 响应（-32700）；`ping` → `{}`；超长行 → -32700 且随后仍可服务；
   stdin EOF 退出 0 且 `lsearch -m report` 仍可用；stdout 全为合法 JSON-RPC，日志仅在 stderr。
-- 回归：`./scripts/self-test.sh -s` → **19/19 通过**（核心流程未受影响）。
+- 回归：`./scripts/self-test.sh -s` → **22/22 通过**（核心流程未受影响）。
+- 正则（Spec 008 交叉）：`search_files{query:'re:^AnnualReport\\.txt$'}` 命中 `AnnualReport.txt`；
+  `search_files{query:'re:['}` → `-32602`；`search_files{query:'re:'}` → `-32602`（空查询规则）。
+  证明：e2e `S11a/S11b/S11c`、单测 `mcp_parse_regex_query`、`mcp_regex_paging_orthogonal`。
 
 ### 评审修复（Oracle needs-fixes）
 - **C1（Critical）查询换行注入**：`parseSearchArgs` 现拒绝 query 中任何 C0 控制字符

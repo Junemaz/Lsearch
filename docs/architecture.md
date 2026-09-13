@@ -34,7 +34,7 @@ TUI 只实现核心功能、GUI 后续接入，均不改动 `core`。
 |---|---|---|
 | 索引存储 | SQLite（WAL） | `files(path PK,name,size,mtime,is_dir,inode)` + `meta` 表；持久化用于守护进程重启后快速恢复，无需重扫 |
 | 内存热索引 | 排序数组 + 路径哈希 | 守护进程常驻，查询在主进程内零 IPC；预计算小写 name/path 加速匹配 |
-| 检索语义 | 大小写不敏感子串；含 `* ?` 转通配符 | 匹配"文件名或完整路径"（对齐 Everything 默认）；支持按 name/path/size/mtime 排序 |
+| 检索语义 | 大小写不敏感子串；含 `* ?` 转通配符；`re:` 前缀转 ECMAScript 正则 | 仅匹配 basename（不匹配完整路径）；支持按 name/path/size/mtime 排序；正则为回溯引擎，病态模式可能长时间占用搜索（见 Spec 008「已知限制」） |
 | 增量更新 | inotify | 为内存索引中的每个目录加 watch；新目录在 `IN_CREATE` 时递归挂接；`IN_MODIFY/ATTRIB` 触发 re-stat |
 | 排除 | 前缀匹配 + 隐藏文件开关 | 默认排除 /proc /sys /dev /run 与 `~/.cache`、回收站 |
 | IPC | 明文行协议 | 简单、可用 socat 调试；留 D-Bus 升级口 |

@@ -55,7 +55,7 @@ Then socket 清理干净、无残留进程
 ## Evidence
 - 构建：`cmake --build build -j"$(nproc)"` 通过（`lsearchd` 重新链接）
 - 单测：`./build/lsearch_tests` → 55 checks / 0 failures
-- 端到端：`./scripts/self-test.sh -s` → **19/19 通过**，其中新增 4 项：
+- 端到端：`./scripts/self-test.sh -s` → **22/22 通过**，其中新增 4 项：
   - 锁被占用时新实例快速退出（未偷 socket）
   - 并发启动恰好一个实例存活
   - 存活实例正常服务（stats）
