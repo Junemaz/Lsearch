@@ -18,8 +18,19 @@ namespace lsearch {
 // 与 Index::search 使用同一编译路径，避免"校验通过但匹配失败"。
 bool validateQuery(const std::string& query, std::string& err);
 
+// 精确检索结果：total_capped==false 时 total 为真实命中数、页间稳定；
+// true 时扫描在候选上限处停止，total 为下界（≈cap），结果子集不保证跨调用稳定。
+struct SearchOutcome {
+  std::vector<SearchResult> results;
+  uint64_t total = 0;
+  bool total_capped = false;
+};
+
 class Index {
  public:
+  // 候选上限默认值（daemon / MCP 降级路径共用同一来源）
+  static constexpr size_t kDefaultCandidateCap = 50000;
+
   // 全量重建（丢弃旧索引）
   void build(std::vector<FileEntry>&& entries);
 
@@ -43,9 +54,29 @@ class Index {
 
   // 搜索；limit==0 表示不限（仍受内部候选上限保护）。
   // 结果已按 sort 排序并裁剪到 limit。
+  // 早停语义（依赖快速路径的 TUI/GUI/旧 search 命令）：候选数达到 limit 即停止扫描。
   void search(const std::string& query, SortKey sort, size_t limit,
               bool dirs_only, bool files_only,
               std::vector<SearchResult>& out, bool& truncated) const;
+
+  // 精确检索：扫描在候选上限处停止（total_capped），否则收集全部匹配（total 精确）。
+  // 结果按 sort 排序并裁剪到 limit（limit==0 不限）。under 为绝对路径子树前缀，
+  // 空串或 "-" 表示全量；按原始字节比较（大小写敏感），先于名称匹配过滤。
+  void searchEx(const std::string& query, SortKey sort, size_t limit,
+                bool dirs_only, bool files_only, const std::string& under,
+                SearchOutcome& out) const;
+
+  // 仅计数（不物化、不排序）；under 语义同 searchEx。
+  size_t countEx(const std::string& query, bool dirs_only, bool files_only,
+                 const std::string& under, bool& capped) const;
+
+  // 测试钩子：覆盖候选上限并返回旧值（调用方负责恢复）。
+  size_t setCandidateCapForTest(size_t cap) {
+    size_t old = candidateCap_;
+    candidateCap_ = cap;
+    return old;
+  }
+  size_t candidateCap() const { return candidateCap_; }
 
  private:
   struct Entry {
@@ -59,7 +90,8 @@ class Index {
   std::atomic<uint64_t> dirs_{0};
   std::atomic<uint64_t> bytes_{0};
 
-  static constexpr size_t kCandidateCap = 50000;  // 结果候选上限，避免病态查询拖慢
+  // 结果候选上限，避免病态查询拖慢；可通过 setCandidateCapForTest 注入小值。
+  size_t candidateCap_ = kDefaultCandidateCap;
 };
 
 }  // namespace lsearch

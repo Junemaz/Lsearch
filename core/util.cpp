@@ -162,6 +162,86 @@ std::string isoTime(int64_t t) {
   return buf;
 }
 
+namespace {
+int b64Value(unsigned char c) {
+  if (c >= 'A' && c <= 'Z') return c - 'A';
+  if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+  if (c >= '0' && c <= '9') return c - '0' + 52;
+  if (c == '+') return 62;
+  if (c == '/') return 63;
+  return -1;
+}
+}  // namespace
+
+std::string base64Encode(const std::string& in) {
+  static const char kTable[] =
+      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  std::string out;
+  out.reserve(((in.size() + 2) / 3) * 4);
+  size_t i = 0;
+  for (; i + 3 <= in.size(); i += 3) {
+    unsigned n = (static_cast<unsigned>(static_cast<unsigned char>(in[i])) << 16) |
+                 (static_cast<unsigned>(static_cast<unsigned char>(in[i + 1])) << 8) |
+                 static_cast<unsigned>(static_cast<unsigned char>(in[i + 2]));
+    out += kTable[(n >> 18) & 63];
+    out += kTable[(n >> 12) & 63];
+    out += kTable[(n >> 6) & 63];
+    out += kTable[n & 63];
+  }
+  const size_t rem = in.size() - i;
+  if (rem == 1) {
+    unsigned n = static_cast<unsigned>(static_cast<unsigned char>(in[i])) << 16;
+    out += kTable[(n >> 18) & 63];
+    out += kTable[(n >> 12) & 63];
+    out += "==";
+  } else if (rem == 2) {
+    unsigned n = (static_cast<unsigned>(static_cast<unsigned char>(in[i])) << 16) |
+                 (static_cast<unsigned>(static_cast<unsigned char>(in[i + 1])) << 8);
+    out += kTable[(n >> 18) & 63];
+    out += kTable[(n >> 12) & 63];
+    out += kTable[(n >> 6) & 63];
+    out += '=';
+  }
+  return out;
+}
+
+bool base64Decode(const std::string& in, std::string& out) {
+  out.clear();
+  if (in.size() > kBase64MaxEncoded) return false;
+  if (in.size() % 4 != 0) return false;
+
+  std::string decoded;
+  decoded.reserve((in.size() / 4) * 3);
+  for (size_t i = 0; i < in.size(); i += 4) {
+    const bool last = (i + 4 == in.size());
+    int v[4] = {0, 0, 0, 0};
+    int pad = 0;
+    for (int k = 0; k < 4; ++k) {
+      const unsigned char c = static_cast<unsigned char>(in[i + static_cast<size_t>(k)]);
+      if (c == '=') {
+        if (!last || k < 2) return false;
+        ++pad;
+        continue;
+      }
+      if (pad > 0) return false;
+      v[k] = b64Value(c);
+      if (v[k] < 0) return false;
+    }
+    if (pad > 2) return false;
+    if (pad == 1 && (v[2] & 0x03) != 0) return false;
+    if (pad == 2 && (v[1] & 0x0F) != 0) return false;
+    const unsigned n = (static_cast<unsigned>(v[0]) << 18) |
+                       (static_cast<unsigned>(v[1]) << 12) |
+                       (static_cast<unsigned>(v[2]) << 6) | static_cast<unsigned>(v[3]);
+    decoded += static_cast<char>((n >> 16) & 0xFF);
+    if (pad < 2) decoded += static_cast<char>((n >> 8) & 0xFF);
+    if (pad < 1) decoded += static_cast<char>(n & 0xFF);
+  }
+  if (decoded.find('\0') != std::string::npos) return false;
+  out = std::move(decoded);
+  return true;
+}
+
 bool globMatch(const std::string& pattern, const std::string& text) {
   // 经典递归 glob：* 匹配任意序列，? 匹配单个字符，大小写不敏感
   const std::string& p = pattern;
