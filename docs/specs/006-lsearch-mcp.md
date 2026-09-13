@@ -1,6 +1,6 @@
 # Lsearch Spec 006 — MCP 前端（stdio，供 LLM 编码代理）
 
-Status: **Proposed**
+Status: **Done**
 
 ## Why
 编码代理（opencode / Claude Code / Cursor 等）在项目目录之外查找文件时依赖 `find` 或全树
@@ -71,6 +71,16 @@ UTF-8（替换字符并注明可能有损）；tab/换行在 IPC 上游的限制
 - `structuredContent` / `outputSchema`（待目标客户端普遍支持后评估）
 - 写操作（重建索引、修改配置）与 D-Bus / HTTP 传输
 
+## 已知限制
+- **>50000 命中的分页非确定性**：引擎候选上限为 50000（`core::Index::kCandidateCap`），
+  且 `Index::search` 在候选数达到 limit 时会并行提前终止，返回的是不确定子集。因此当命中
+  总数超过 50000 时，`offset` 落在 cap 附近/之后的页无法保证稳定且互不重叠；此时
+  `page.truncated=true` 提示结果已被截断。≤50000 的命中通过「本页被填满时改取 cap 以获得
+  确定全局前缀」保证页间不重叠。
+- **信号竞态**：SIGTERM/SIGINT 在阻塞 `read` 时经 EINTR 干净退出（退出码 0，不触碰 daemon）；
+  若信号恰在 `handleLine` 处理中途到达，则当前请求可能未应答即退出——对 stdio 前端可接受，
+  未做请求级原子性。
+
 ## Scenario: 代理即时文件名搜索
 Given 隔离 HOME 中索引含 `AnnualReport.txt` / `vacation_photo.jpg` / 目录 `deeper/`
 When 现代客户端 `tools/call search_files{query:"report"}`
@@ -85,15 +95,52 @@ When 向 stdin 发送 EOF
 Then MCP 进程退出 0，且 `lsearchd` 仍可被 CLI 查询（daemon 未被连带停止）
 
 ## Task
-- [ ] `mcp/json.*`：最小 JSON 读写 + 正确转义（或 vendor nlohmann 单头）
-- [ ] `mcp/main.cpp`：stdio 循环 + 双代检测 + 工具路由
-- [ ] `search_files` / `index_stats`：参数校验、over-fetch 分页、结果编码
-- [ ] CMake 目标 + install + README 更新
-- [ ] 单测（JSON 转义/参数钳制/切片）+ `scripts/self-test-mcp.sh`（S1–S9）
+- [x] `mcp/json.*`：最小 JSON 读写 + 正确转义（或 vendor nlohmann 单头）
+- [x] `mcp/main.cpp`：stdio 循环 + 双代检测 + 工具路由
+- [x] `search_files` / `index_stats`：参数校验、over-fetch 分页、结果编码
+- [x] CMake 目标 + install + README 更新
+- [x] 单测（JSON 转义/参数钳制/切片）+ `scripts/self-test-mcp.sh`（S1–S9）
 - [x] 前置：Spec 007（单例锁）已完成（见 [007-daemon-singleton](007-daemon-singleton.md)）
 
 ## Deliverable
 `mcp/` 目标、`docs/specs/006-lsearch-mcp.md`、`scripts/self-test-mcp.sh`
 
 ## Evidence
-（未实现，无）
+- 构建（C++17，`-Wall -Wextra` 零告警）：
+  `cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j"$(nproc)"`
+  产物 `build/lsearch-mcp`；静态库 `lsearch_mcp_lib`（`mcp/json.cpp` + `mcp/protocol.cpp`）。
+- 单测 `./build/lsearch_tests` → **218 checks / 0 failures**（新增 16 例：
+  `mcp_json_escape_roundtrip`、`mcp_json_invalid_utf8_sanitized`、`mcp_json_parse_errors`、
+  `mcp_json_surrogate_and_nul`、`mcp_json_depth_limit`、`mcp_json_nonfinite_rejected`、
+  `mcp_json_asint_clamp`、`mcp_limit_clamp`、`mcp_overfetch_arithmetic`、`mcp_paginate_slicing`、
+  `mcp_paginate_cap`、`mcp_cap_truncation`、`mcp_parse_args`、`mcp_query_control_chars_rejected`、
+  `mcp_tool_mapping`、`mcp_meta_validation`、`mcp_builders`）。
+- 端到端 `./scripts/self-test-mcp.sh -s` → **通过 25 项 / 失败 0 项**（S1–S10，真实二进制 + 管道 +
+  隔离 HOME/XDG_*，python3 驱动）：discover 双版本与 resultType；modern tools/list 的
+  ttlMs/cacheScope；legacy initialize + `search_files{report}` 命中 AnnualReport.txt；空查询/
+  未知工具 -32602；limit=0→1、limit=1000000→200 不洪水；query 含换行 → -32602 且 daemon 存活；
+  page(0,2)∪page(2,2)=全局前 4 且不重叠；offset≥50000 空页+truncated；index_stats files>0 且
+  roots 含隔离 HOME；无写工具；present-but-invalid `_meta` → -32602；JSON 数组批次 → -32600；
+  `id:1e999` → 合法 JSON 响应（-32700）；`ping` → `{}`；超长行 → -32700 且随后仍可服务；
+  stdin EOF 退出 0 且 `lsearch -m report` 仍可用；stdout 全为合法 JSON-RPC，日志仅在 stderr。
+- 回归：`./scripts/self-test.sh -s` → **19/19 通过**（核心流程未受影响）。
+
+### 评审修复（Oracle needs-fixes）
+- **C1（Critical）查询换行注入**：`parseSearchArgs` 现拒绝 query 中任何 C0 控制字符
+  （`< 0x20`：`\n \r \t \0` 等）→ `-32602`。证明：单测 `mcp_query_control_chars_rejected`；
+  e2e `S4e`（`query:"x\nshutdown"` → -32602）与 `S4f`（随后 `index_stats` 仍返回 files>0，
+  即 daemon 未被注入的 `shutdown` 杀死）。
+- **M1（Major）非有限数**：`parseNumber` 对 `strtod` 非有限结果返回解析错误；`asInt` 对
+  非有限/越界 double 钳制到 `LLONG_MIN/MAX`（消除 UB）；`dump` 对非有限值输出 `0`。
+  证明：单测 `mcp_json_nonfinite_rejected`、`mcp_json_asint_clamp`；e2e `S10c`
+  （`id:1e999` → 合法 JSON 响应 -32700，stdout 全部可解析）。
+- **M2（Major）50k refetch 诚实性**：refetch 命中 cap 时经 `applyCapTruncation` 置
+  `truncated:true`（即使小窗口）；refetch 失败时返回 `isError:true` 可操作错误而非静默返回
+  不确定子集。证明：单测 `mcp_cap_truncation`；e2e `S5a`（≥6 命中，page(0,2)∪page(2,2)
+  等于全局排序前 4 且不重叠，实际走 refetch 路径）。
+- **次要项**：stdin 行缓冲上限 1 MiB（超限丢弃至换行并回 -32700，不无界增长）；实现 `ping`
+  → `{}`；缺 `method` → -32600；`index_stats` 要求 `arguments` 缺省或空对象，否则 -32602。
+  证明：e2e `S10b/S10d/S10e/S10f`。
+
+- 生命周期：对阻塞在 stdin 的进程发送 SIGTERM/SIGINT，均退出码 0 且守护进程存活（手工验证）。
+
