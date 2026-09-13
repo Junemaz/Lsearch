@@ -8,6 +8,8 @@
 1. 新需求先写成 `specs/NNN-*.md`（状态 Proposed）。
 2. 开始实现 → 状态 In Progress。
 3. 实现完，跑对应单测与冒烟，把结果写进该规格的 `Evidence` → 状态 **Done**。
+4. **提交前必须同步所有受影响文档**（本清单、受影响规格的 Evidence、README/architecture 的
+   计数与行为描述等）；文档滞后于实现视为未完成，不得提交。
 
 ## 状态总览
 
