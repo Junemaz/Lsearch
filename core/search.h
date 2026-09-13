@@ -1,7 +1,8 @@
 #pragma once
 // 内存热索引：守护进程常驻，支持"即输即搜"
 // 语义：仅按**最终文件/文件夹名（basename）**做大小写不敏感的子串匹配；
-// 查询含 * 或 ? 时切换为 glob 匹配。提供按名称/路径/大小/修改时间排序。
+// 查询以 `re:` 开头时切换为 ECMAScript 正则（大小写不敏感，regex_search），
+// 否则含 * 或 ? 时切换为 glob 匹配。提供按名称/路径/大小/修改时间排序。
 #include "core/entry.h"
 
 #include <atomic>
@@ -11,6 +12,11 @@
 #include <vector>
 
 namespace lsearch {
+
+// 校验查询字符串：`re:` 前缀且正则非法时返回 false 并把错误写入 err；
+// 其余情况（含非 `re:` 查询、`re:` 后为空/全空白）一律返回 true。
+// 与 Index::search 使用同一编译路径，避免"校验通过但匹配失败"。
+bool validateQuery(const std::string& query, std::string& err);
 
 class Index {
  public:

@@ -28,7 +28,8 @@ static void printUsage(FILE* f) {
           "      --rebuild      触发重新建索引\n"
           "  -v, --version      显示版本\n"
           "  -h, --help         显示帮助\n"
-          "关键词为大小写不敏感的子串匹配；含 * 或 ? 时按通配符匹配。\n");
+          "关键词为大小写不敏感的子串匹配；含 * 或 ? 时按通配符匹配；\n"
+          "以 re: 开头时按 ECMAScript 正则匹配（大小写不敏感，匹配文件名）。\n");
 }
 
 int main(int argc, char** argv) {

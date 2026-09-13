@@ -1,6 +1,7 @@
 #include "daemon/daemon.h"
 
 #include "core/indexer.h"
+#include "core/search.h"
 #include "core/util.h"
 #include "ipc/proto.h"
 
@@ -146,6 +147,13 @@ void Daemon::buildSearchResponse(const std::string& line, std::string& out) {
   SortKey sort;
   if (!sortKeyFromName(head[4], sort)) {
     out = "ERR bad sort\n";
+    return;
+  }
+  std::string verr;
+  if (!validateQuery(rest, verr)) {
+    for (char& c : verr)
+      if (c == '\n' || c == '\r') c = ' ';  // 保证 ERR 单行
+    out = "ERR bad regex: " + verr + "\n";
     return;
   }
   std::vector<SearchResult> res;

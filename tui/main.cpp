@@ -262,7 +262,11 @@ int main() {
       if (g_scroll + rows > n && n > rows) g_scroll = n - rows;
       if (g_scroll < 0) g_scroll = 0;
       std::string qlow;
-      { std::lock_guard<std::mutex> ql(g_qmut); qlow = toLowerAscii(g_query); }
+      {
+        std::lock_guard<std::mutex> ql(g_qmut);
+        // 正则模式下不做子串高亮（模式与子串语义不同，避免误高亮）
+        if (!startsWith(g_query, "re:")) qlow = toLowerAscii(g_query);
+      }
 
       for (int r = 0; r < rows; ++r) {
         move(1 + r, 0);

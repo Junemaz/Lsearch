@@ -3,11 +3,37 @@
 #include "core/util.h"
 
 #include <algorithm>
+#include <regex>
 #include <thread>
 
 namespace lsearch {
 
 static std::string toLow(const std::string& s) { return lsearch::toLowerAscii(s); }
+
+namespace {
+
+// 与 Index::search 共用的正则编译路径：ECMAScript + 大小写不敏感。
+// pattern 必须保持原始大小写，小写化会改变 \D/\W/\S 等转义语义。
+bool compileRegex(const std::string& pattern, std::regex& out, std::string& err) {
+  try {
+    out = std::regex(pattern, std::regex::ECMAScript | std::regex::icase);
+    return true;
+  } catch (const std::regex_error& e) {
+    err = e.what();
+    return false;
+  }
+}
+
+}  // namespace
+
+bool validateQuery(const std::string& query, std::string& err) {
+  err.clear();
+  if (!startsWith(query, "re:")) return true;
+  const std::string pattern = query.substr(3);
+  if (trim(pattern).empty()) return true;  // re: 空/全空白 → 合法空查询
+  std::regex re;
+  return compileRegex(pattern, re, err);
+}
 
 void Index::clear() {
   entries_.clear();
@@ -117,8 +143,18 @@ void Index::search(const std::string& query, SortKey sort, size_t limit,
   truncated = false;
   if (query.empty() || entries_.empty()) return;
 
+  const bool isRegex = startsWith(query, "re:");
+  std::regex re;
+  if (isRegex) {
+    const std::string pattern = query.substr(3);
+    if (trim(pattern).empty()) return;  // re: 空/全空白 → 空结果
+    std::string cerr;
+    if (!compileRegex(pattern, re, cerr)) return;  // 防御：非法正则视为空结果
+  }
+
   const std::string q = toLow(query);
-  const bool hasWildcard = q.find('*') != std::string::npos || q.find('?') != std::string::npos;
+  const bool hasWildcard =
+      !isRegex && (q.find('*') != std::string::npos || q.find('?') != std::string::npos);
 
   if (limit == 0) limit = kCandidateCap;
 
@@ -145,10 +181,17 @@ void Index::search(const std::string& query, SortKey sort, size_t limit,
       if ((dirs_only && !en.e.is_dir) || (files_only && en.e.is_dir)) continue;
       // 语义：仅按最终文件/文件夹名（basename）匹配，不匹配完整路径
       bool hit;
-      if (hasWildcard)
+      if (isRegex) {
+        try {
+          hit = std::regex_search(en.e.name, re);  // 原始 basename + icase，禁止对小写名匹配
+        } catch (const std::regex_error&) {
+          hit = false;  // 匹配期异常不得逸出 worker（否则 std::terminate 崩溃守护进程）
+        }
+      } else if (hasWildcard) {
         hit = globMatch(q, en.name_low);
-      else
+      } else {
         hit = en.name_low.find(q) != std::string::npos;
+      }
       if (!hit) continue;
       count.fetch_add(1, std::memory_order_relaxed);
       local.push_back({en.e, false});
