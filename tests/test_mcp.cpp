@@ -279,6 +279,26 @@ TEST(mcp_meta_validation) {
   CHECK(m.valid);
 }
 
+TEST(mcp_meta_legacy_tolerated) {
+  // legacy 客户端 _meta 可携带 progressToken 等自定义键：不得视为非法 modern 请求。
+  Json legacy = Json::object();
+  Json p = Json::object();
+  Json meta = Json::object();
+  meta.set("progressToken", Json::str("tok1"));
+  p.set("_meta", meta);
+  legacy.set("params", p);
+  ModernMeta m = checkModernMeta(legacy);
+  CHECK(!m.hasMeta);
+  CHECK(!m.valid);
+  CHECK(m.error.empty());
+
+  Json nonObject = Json::object();
+  Json p2 = Json::object();
+  p2.set("_meta", Json::str("x"));
+  nonObject.set("params", p2);
+  CHECK(!checkModernMeta(nonObject).hasMeta);
+}
+
 TEST(mcp_builders) {
   Json discover = discoverResult();
   CHECK_EQ(discover.find("resultType")->asString(), std::string("complete"));

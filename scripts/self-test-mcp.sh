@@ -252,6 +252,15 @@ try:
 except Exception as e:
     bad("S11c", f"exception: {e}")
 
+# ---- S12: legacy _meta.progressToken 不得被误判为非法 modern ----
+try:
+    r = c.request("tools/call", params={"name": "index_stats",
+                                        "_meta": {"progressToken": "tok1"}})
+    okv = result(r) is not None and errcode(r) is None
+    (ok if okv else bad)("S12", "legacy _meta.progressToken tools/call 正常返回" if okv else f"{r}")
+except Exception as e:
+    bad("S12", f"exception: {e}")
+
 # ---- S7: 只读工具面 ----
 try:
     res = result(c.request("tools/list")) or {}
