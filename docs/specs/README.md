@@ -10,6 +10,8 @@
 3. 实现完，跑对应单测与冒烟，把结果写进该规格的 `Evidence` → 状态 **Done**。
 4. **提交前必须同步所有受影响文档**（本清单、受影响规格的 Evidence、README/architecture 的
    计数与行为描述等）；文档滞后于实现视为未完成，不得提交。
+5. 协议面（MCP/IPC/D-Bus）另需**外部验证器**（conformance / 真实客户端 / 第三方工具）作为
+   完成条件（见 [011-test-hardening](011-test-hardening.md)）。
 
 ## 状态总览
 
@@ -26,6 +28,7 @@
 | [008-regex](008-regex.md) | V3：正则匹配（`re:` 前缀，ECMAScript） | **Done** | `lsearch_tests` 481、`self-test.sh` 25/25、`self-test-mcp.sh` 37/37 |
 | [009-dbus](009-dbus.md) | V3：D-Bus 集成（桌面门面 + 按需激活） | **Done** | `lsearch_tests` 481、`self-test-dbus.sh` 22/22 |
 | [010-search-protocol](010-search-protocol.md) | 检索协议 v2：真 total/truncated + 路径子树过滤 | **Done** | `lsearch_tests` 481、`self-test-ipc.sh` 18/18、性能证据 |
+| [011-test-hardening](011-test-hardening.md) | 协议测试加固（外部验证器 + 转录回放 + 负形状矩阵） | **Proposed** | — |
 
 如何核对：每张规格的 `## Scenario` 是"用户可复现的验收场景"，`## Evidence` 给出
 "我如何证明它成立"（单测名 + 命令）。
