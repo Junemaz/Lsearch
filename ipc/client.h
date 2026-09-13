@@ -1,12 +1,18 @@
 #pragma once
 // IPC 客户端：被 CLI / TUI 复用；连接失败时可自动拉起守护进程
 #include "core/entry.h"
+#include "core/search.h"
 
+#include <cstdint>
 #include <string>
 #include <utility>
 #include <vector>
 
 namespace lsearch {
+
+// 新客户端请求非空 under 但连到无 search2/count2 的旧 daemon 时统一返回的可操作错误。
+inline constexpr const char* kUnderUnsupportedMessage =
+    "running daemon does not support 'under' (no search2/count2); restart or upgrade lsearchd";
 
 class Client {
  public:
@@ -26,6 +32,24 @@ class Client {
   bool search(const std::string& query, SortKey sort, size_t limit,
               bool dirs_only, bool files_only,
               std::vector<SearchResult>& out, size_t* total, std::string& err);
+
+  // search2：精确 total/total_capped + under 子树过滤。
+  // 旧 daemon 无 search2 时：under 为空 → 自动降级到 search（usedLegacySearch()==true，
+  // total 为旧语义）；under 非空 → 返回 false 并填 kUnderUnsupportedMessage（绝不静默丢弃）。
+  bool searchEx(const std::string& query, SortKey sort, size_t limit,
+                bool dirs_only, bool files_only, const std::string& under,
+                SearchOutcome& out, std::string& err);
+
+  // count2：精确计数（不物化）；旧 daemon 同上——under 空降级为 legacy 计数，非空则报错。
+  bool countEx(const std::string& query, bool dirs_only, bool files_only,
+               const std::string& under, uint64_t& total, bool& capped, std::string& err);
+
+  // capabilities：返回 daemon 支持的命令名列表。
+  bool capabilities(std::vector<std::string>& commands, std::string& err);
+  // 是否支持 search2/count2（惰性经 capabilities 探测；旧 daemon → false）。
+  bool supportsV2();
+  // 最近一次 searchEx 是否走了 legacy 降级路径。
+  bool usedLegacySearch() const { return lastSearchLegacy_; }
 
   // stats：返回 key=value 列表
   bool stats(std::vector<std::pair<std::string, std::string>>& kv, std::string& err);
@@ -47,9 +71,17 @@ class Client {
   // 发送请求并解析 "OK\n key=value... END" 回复
   bool readKvReply(const std::string& req, std::vector<std::pair<std::string, std::string>>& kv,
                    std::string& err);
+  // legacy `search` 降级：仅当 under 为空时调用（非空 under 无 v2 时必须显式报错）。
+  bool searchLegacyFallback(const std::string& query, SortKey sort, size_t limit,
+                            bool dirs_only, bool files_only, SearchOutcome& out,
+                            std::string& err);
+  bool countLegacyFallback(const std::string& query, bool dirs_only, bool files_only,
+                           uint64_t& total, bool& capped, std::string& err);
 
   int fd_ = -1;
   std::string recvBuf_;
+  int v2_ = -1;                 // -1 未知 / 0 不支持 / 1 支持 search2
+  bool lastSearchLegacy_ = false;
 };
 
 }  // namespace lsearch

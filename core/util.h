@@ -1,5 +1,6 @@
 #pragma once
 // 通用小工具：字符串 / 路径 / 目录定位
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -29,5 +30,13 @@ std::string isoTime(int64_t t);     // Unix 秒 -> "YYYY-MM-DD HH:MM:SS"
 
 // 简单 glob：支持 * 和 ?，大小写不敏感
 bool globMatch(const std::string& pattern, const std::string& text);
+
+// 严格 base64（标准字母表 A-Za-z0-9+/ + '=' 填充）。
+// 编码：无长度限制；解码：拒绝空白与非法字符、长度非 4 的倍数、非法填充，
+// 编码串长度上限 kBase64MaxEncoded（8192），解码结果含 NUL 时失败。
+// 失败时不修改 out（清空）。
+std::string base64Encode(const std::string& in);
+bool base64Decode(const std::string& in, std::string& out);
+inline constexpr std::size_t kBase64MaxEncoded = 8192;
 
 }  // namespace lsearch

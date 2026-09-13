@@ -37,7 +37,8 @@ TUI 只实现核心功能、GUI 后续接入，均不改动 `core`。
 |---|---|---|
 | 索引存储 | SQLite（WAL） | `files(path PK,name,size,mtime,is_dir,inode)` + `meta` 表；持久化用于守护进程重启后快速恢复，无需重扫 |
 | 内存热索引 | 排序数组 + 路径哈希 | 守护进程常驻，查询在主进程内零 IPC；预计算小写 name/path 加速匹配 |
-| 检索语义 | 大小写不敏感子串；含 `* ?` 转通配符；`re:` 前缀转 ECMAScript 正则 | 仅匹配 basename（不匹配完整路径）；支持按 name/path/size/mtime 排序；正则为回溯引擎，病态模式可能长时间占用搜索（见 Spec 008「已知限制」） |
+| 检索语义 | 大小写不敏感子串；含 `* ?` 转通配符；`re:` 前缀转 ECMAScript 正则；可选 `under` 子树过滤 | 仅匹配 basename（不匹配完整路径）；支持按 name/path/size/mtime 排序；`under` 为绝对路径前缀（原始字节、大小写敏感，`path==under || startsWith(path, under+"/")`）；正则为回溯引擎，病态模式可能长时间占用搜索（见 Spec 008「已知限制」） |
+| 计数/分页语义 | 协议 v2（Spec 010） | 旧 `search` 早停于请求 limit（TUI/GUI/D-Bus 仍用，快速路径）；`search2`/`count2` 在候选上限（5 万）处停止：命中 ≤cap 时 `total` 精确、页间稳定，>cap 时 `total_capped=1`、`total` 为下界、不承诺 >cap 页稳定；`count2` 免物化免排序 |
 | 增量更新 | inotify | 为内存索引中的每个目录加 watch；新目录在 `IN_CREATE` 时递归挂接；`IN_MODIFY/ATTRIB` 触发 re-stat |
 | 排除 | 前缀匹配 + 隐藏文件开关 | 默认排除 /proc /sys /dev /run 与 `~/.cache`、回收站 |
 | IPC | 明文行协议 | 简单、可用 socat 调试；D-Bus 作为**并存的桌面门面**（Spec 009：`lsearch-dbus` 注册会话总线 `com.lsearch.Daemon`，按需激活，底层仍复用同一 socket 客户端） |
@@ -47,11 +48,14 @@ TUI 只实现核心功能、GUI 后续接入，均不改动 `core`。
 ## 4. 一次搜索的路径
 
 ```
-TUI/CLI → Client → socket → lsearchd serveConnection
-        → handleRequest("search ... <query>")
-        → idx.search()（共享锁，并行分块扫描 + 排序裁剪）
-        → 结果行 → socket → 前端渲染
+CLI/MCP → Client → socket → lsearchd serveConnection
+        → handleRequest("search2 <limit> <dirs> <files> <sort> <under64> <query>")
+        → idx.searchEx()（共享锁，并行分块扫描：命中 ≤cap 收集全部 → 精确 total；否则于 cap 停止）
+        → "OK <returned> <total> <total_capped>" + 结果行 → socket → 前端渲染/分页
 ```
+TUI/GUI/D-Bus 仍走旧 `search` 命令（`idx.search()` 早停于请求 limit 的快速路径）；
+`count2` 走 `idx.countEx()`（免物化）。`capabilities` 供新客户端探测 `search2`，旧 daemon
+（无该命令）时客户端自动降级到 `search`。
 
 ## 5. 开放问题 / 后续（V2/V3）
 - **离线追平**：守护进程停机期间的改动不自动补齐（V1 用 F5 重建兜底）。

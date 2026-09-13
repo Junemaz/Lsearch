@@ -30,6 +30,7 @@ glob 匹配（`*` 任意序列、`?` 单字符，均大小写不敏感）。
 #### Requirement 5 — IPC 明文协议
 `ping / version / stats / search <limit> <dirs> <files> <sort> <query> / rebuild /
 add-path / remove-path / shutdown`；响应 `OK/ERR` + `END` 结构；socket chmod 0600。
+（追加式扩展见 [Spec 010](010-search-protocol.md)：`search2`/`count2`/`capabilities`，响应格式不变。）
 
 #### Requirement 6 — 守护进程自动拉起
 CLI/TUI 连不上 socket 时自动 `lsearchd`（默认开启，`-m` 关闭）。

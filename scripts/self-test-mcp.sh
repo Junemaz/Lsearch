@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Lsearch MCP 前端端到端自测（stdio JSON-RPC，S1–S11）
+# Lsearch MCP 前端端到端自测（stdio JSON-RPC，S1–S13）
 #   ./scripts/self-test-mcp.sh        # 自动构建后跑全部
 #   ./scripts/self-test-mcp.sh -s     # 跳过构建，使用现有 build/
 # 说明：守护进程与 MCP 客户端必须处于同一 shell 环境（/tmp 隔离），故全部在此脚本内完成；
@@ -45,6 +45,8 @@ echo x > "$T/home/docs/mcp_pg_3.txt"
 echo x > "$T/home/docs/mcp_pg_4.txt"
 echo x > "$T/home/docs/mcp_pg_5.txt"
 echo x > "$T/home/docs/mcp_pg_6.txt"
+echo x > "$T/home/docs/sub_dup.txt"
+echo x > "$T/home/pics/sub_dup.txt"
 
 echo "==> 2/ 启动守护进程并建索引"
 "$ROOT/build/lsearchd" --foreground > "$T/log.txt" 2>&1 &
@@ -53,7 +55,7 @@ for i in $(seq 1 80); do [ -S "$T/run/lsearch.sock" ] && break; sleep 0.2; done
 sleep 1
 if [ ! -S "$T/run/lsearch.sock" ]; then echo "守护进程未就绪"; exit 1; fi
 
-echo "==> 3/ 驱动 MCP（S1–S11）"
+echo "==> 3/ 驱动 MCP（S1–S13）"
 cat > "$T/driver.py" <<'PYEOF'
 import json, os, subprocess, sys
 
@@ -213,8 +215,23 @@ try:
 
     cap = search_payload(call_search(c, {"query": "mcp_pg", "offset": 50000, "limit": 2}))
     okv = (cap["page"]["returned"] == 0 and cap["page"]["has_more"] is False
-           and cap["page"]["truncated"] is True)
-    (ok if okv else bad)("S5b", "offset≥50000 → 空页/truncated" if okv else f"{cap['page']}")
+           and cap["page"]["truncated"] is False and cap["page"]["total"] == 6
+           and cap["page"]["total_capped"] is False
+           and cap["page"]["total_is_lower_bound"] is False)
+    (ok if okv else bad)("S5b", "offset≥total → 空页、total 精确且未截断"
+                        if okv else f"{cap['page']}")
+
+    pg = search_payload(call_search(c, {"query": "mcp_pg", "limit": 2}))
+    okv = (pg["page"]["total"] == 6 and pg["page"]["returned"] == 2
+           and pg["page"]["has_more"] is True and pg["page"]["total_capped"] is False)
+    (ok if okv else bad)("S5c", "page.total 精确=6、has_more 边界(0+2<6)"
+                        if okv else f"{pg['page']}")
+
+    last = search_payload(call_search(c, {"query": "mcp_pg", "offset": 4, "limit": 2}))
+    okv = (last["page"]["returned"] == 2 and last["page"]["has_more"] is False
+           and last["page"]["total"] == 6)
+    (ok if okv else bad)("S5d", "末页 offset+returned==total → has_more=false"
+                        if okv else f"{last['page']}")
 except Exception as e:
     bad("S5", f"exception: {e}")
 
@@ -260,6 +277,38 @@ try:
     (ok if okv else bad)("S12", "legacy _meta.progressToken tools/call 正常返回" if okv else f"{r}")
 except Exception as e:
     bad("S12", f"exception: {e}")
+
+# ---- S13: under 子树过滤 + 非法 under ----
+try:
+    under_docs = os.path.join(HOME, "docs")
+    p = search_payload(call_search(c, {"query": "sub_dup", "under": under_docs}))
+    paths = sorted(x["path"] for x in p["results"])
+    okv = (paths == [os.path.join(under_docs, "sub_dup.txt")]
+           and p["page"]["total"] == 1 and p["page"]["has_more"] is False)
+    (ok if okv else bad)("S13a", "under=docs 仅命中 docs 下同名文件且 total=1"
+                        if okv else f"{p}")
+
+    p_all = search_payload(call_search(c, {"query": "sub_dup"}))
+    okv = p_all["page"]["total"] == 2
+    (ok if okv else bad)("S13b", "无 under 时 total=2（对照）" if okv else f"{p_all['page']}")
+
+    p_root = search_payload(call_search(c, {"query": "sub_dup", "under": "/"}))
+    okv = p_root["page"]["total"] == 2
+    (ok if okv else bad)("S13c", "under=/ 等价全量" if okv else f"{p_root['page']}")
+
+    r = call_search(c, {"query": "sub_dup", "under": "relative/path"})
+    okv = errcode(r) == -32602
+    (ok if okv else bad)("S13d", "相对 under → -32602" if okv else f"{r}")
+
+    r = call_search(c, {"query": "sub_dup", "under": "-"})
+    okv = errcode(r) == -32602
+    (ok if okv else bad)("S13e", "under='-' 哨兵 → -32602" if okv else f"{r}")
+
+    r = call_search(c, {"query": "sub_dup", "under": "/a\nb"})
+    okv = errcode(r) == -32602
+    (ok if okv else bad)("S13f", "under 含控制字符 → -32602" if okv else f"{r}")
+except Exception as e:
+    bad("S13", f"exception: {e}")
 
 # ---- S7: 只读工具面 ----
 try:

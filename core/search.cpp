@@ -24,6 +24,50 @@ bool compileRegex(const std::string& pattern, std::regex& out, std::string& err)
   }
 }
 
+void sortResults(std::vector<SearchResult>& out, SortKey sort) {
+  switch (sort) {
+    case SortKey::Name:
+      std::sort(out.begin(), out.end(), [](const SearchResult& a, const SearchResult& b) {
+        int c = a.entry.name.compare(b.entry.name);
+        if (c != 0) return c < 0;
+        return a.entry.path < b.entry.path;
+      });
+      break;
+    case SortKey::Path:
+      std::sort(out.begin(), out.end(), [](const SearchResult& a, const SearchResult& b) {
+        return a.entry.path < b.entry.path;
+      });
+      break;
+    case SortKey::Size:
+      std::sort(out.begin(), out.end(), [](const SearchResult& a, const SearchResult& b) {
+        if (a.entry.size != b.entry.size) return a.entry.size > b.entry.size;
+        return a.entry.path < b.entry.path;
+      });
+      break;
+    case SortKey::Mtime:
+      std::sort(out.begin(), out.end(), [](const SearchResult& a, const SearchResult& b) {
+        if (a.entry.mtime != b.entry.mtime) return a.entry.mtime > b.entry.mtime;
+        return a.entry.path < b.entry.path;
+      });
+      break;
+  }
+}
+
+// ""/"/"/"-" = 全量；其余去掉尾部 '/'（按原始字节，大小写敏感）。
+std::string normalizeUnder(const std::string& in) {
+  if (in.empty() || in == "-") return std::string();
+  std::string u = in;
+  while (u.size() > 1 && u.back() == '/') u.pop_back();
+  if (u == "/") return std::string();
+  return u;
+}
+
+bool underMatches(const std::string& path, const std::string& u) {
+  if (u.empty()) return true;
+  if (path == u) return true;
+  return path.size() > u.size() && startsWith(path, u) && path[u.size()] == '/';
+}
+
 }  // namespace
 
 bool validateQuery(const std::string& query, std::string& err) {
@@ -156,7 +200,8 @@ void Index::search(const std::string& query, SortKey sort, size_t limit,
   const bool hasWildcard =
       !isRegex && (q.find('*') != std::string::npos || q.find('?') != std::string::npos);
 
-  if (limit == 0) limit = kCandidateCap;
+  const size_t cap = candidateCap_;
+  if (limit == 0) limit = cap;
 
   // 并行分块扫描（各线程收集自己的候选，最后合并排序裁剪）
   unsigned nthreads = std::thread::hardware_concurrency();
@@ -175,8 +220,8 @@ void Index::search(const std::string& query, SortKey sort, size_t limit,
     local.reserve(256);
     for (size_t i = begin; i < end; ++i) {
       uint64_t c = count.load(std::memory_order_relaxed);
-      if (c >= kCandidateCap) break;                       // 兜底：避免病态查询拖垮
-      if (limit != 0 && limit < kCandidateCap && c >= limit) break;
+      if (c >= cap) break;                       // 兜底：避免病态查询拖垮
+      if (limit != 0 && limit < cap && c >= limit) break;
       const Entry& en = entries_[i];
       if ((dirs_only && !en.e.is_dir) || (files_only && en.e.is_dir)) continue;
       // 语义：仅按最终文件/文件夹名（basename）匹配，不匹配完整路径
@@ -199,47 +244,176 @@ void Index::search(const std::string& query, SortKey sort, size_t limit,
   };
 
   // 等待计数达到 limit 时提前终止所有线程
-  // （简单实现：全部跑完；'a' 这类病态查询由 kCandidateCap 兜底，够 Home 规模用）
+  // （简单实现：全部跑完；'a' 这类病态查询由候选上限 candidateCap_ 兜底，够 Home 规模用）
   std::vector<std::thread> threads;
   for (unsigned t = 0; t < nthreads; ++t) threads.emplace_back(worker, t);
   for (auto& th : threads) th.join();
 
   size_t total = 0;
   for (auto& v : perThread) total += v.size();
-  truncated = total >= kCandidateCap;
+  truncated = total >= cap;
 
   out.reserve(total);
   for (auto& v : perThread)
     for (auto& r : v) out.push_back(std::move(r));
 
-  // 排序
-  switch (sort) {
-    case SortKey::Name:
-      std::sort(out.begin(), out.end(), [](const SearchResult& a, const SearchResult& b) {
-        int c = a.entry.name.compare(b.entry.name);
-        if (c != 0) return c < 0;
-        return a.entry.path < b.entry.path;
-      });
-      break;
-    case SortKey::Path:
-      std::sort(out.begin(), out.end(), [](const SearchResult& a, const SearchResult& b) {
-        return a.entry.path < b.entry.path;
-      });
-      break;
-    case SortKey::Size:
-      std::sort(out.begin(), out.end(), [](const SearchResult& a, const SearchResult& b) {
-        if (a.entry.size != b.entry.size) return a.entry.size > b.entry.size;
-        return a.entry.path < b.entry.path;
-      });
-      break;
-    case SortKey::Mtime:
-      std::sort(out.begin(), out.end(), [](const SearchResult& a, const SearchResult& b) {
-        if (a.entry.mtime != b.entry.mtime) return a.entry.mtime > b.entry.mtime;
-        return a.entry.path < b.entry.path;
-      });
-      break;
-  }
+  sortResults(out, sort);
   if (limit > 0 && out.size() > limit) out.resize(limit);
+}
+
+void Index::searchEx(const std::string& query, SortKey sort, size_t limit,
+                     bool dirs_only, bool files_only, const std::string& under,
+                     SearchOutcome& out) const {
+  out.results.clear();
+  out.total = 0;
+  out.total_capped = false;
+  if (query.empty() || entries_.empty()) return;
+
+  const bool isRegex = startsWith(query, "re:");
+  std::regex re;
+  if (isRegex) {
+    const std::string pattern = query.substr(3);
+    if (trim(pattern).empty()) return;
+    std::string cerr;
+    if (!compileRegex(pattern, re, cerr)) return;
+  }
+  const std::string q = toLow(query);
+  const bool hasWildcard =
+      !isRegex && (q.find('*') != std::string::npos || q.find('?') != std::string::npos);
+  const std::string u = normalizeUnder(under);
+  const size_t cap = candidateCap_;
+
+  unsigned nthreads = std::thread::hardware_concurrency();
+  if (nthreads == 0) nthreads = 2;
+  if (nthreads > 32) nthreads = 32;
+  const size_t n = entries_.size();
+  if (nthreads > n) nthreads = static_cast<unsigned>(n ? n : 1);
+
+  std::vector<std::vector<SearchResult>> perThread(nthreads);
+  std::atomic<uint64_t> count{0};
+  std::atomic<bool> capped{false};
+
+  auto worker = [&](unsigned tid) {
+    size_t begin = (n * tid) / nthreads;
+    size_t end = (n * (tid + 1)) / nthreads;
+    auto& local = perThread[tid];
+    local.reserve(256);
+    for (size_t i = begin; i < end; ++i) {
+      if (count.load(std::memory_order_relaxed) >= cap) {
+        capped.store(true, std::memory_order_relaxed);
+        break;
+      }
+      const Entry& en = entries_[i];
+      if (!underMatches(en.e.path, u)) continue;
+      if ((dirs_only && !en.e.is_dir) || (files_only && en.e.is_dir)) continue;
+      bool hit;
+      if (isRegex) {
+        try {
+          hit = std::regex_search(en.e.name, re);
+        } catch (const std::regex_error&) {
+          hit = false;
+        }
+      } else if (hasWildcard) {
+        hit = globMatch(q, en.name_low);
+      } else {
+        hit = en.name_low.find(q) != std::string::npos;
+      }
+      if (!hit) continue;
+      // 仅当本线程分配到的槽位 < cap 时收集，保证存储总数恰为 cap（超采样不入列）。
+      uint64_t before = count.fetch_add(1, std::memory_order_relaxed);
+      if (before >= cap) {
+        capped.store(true, std::memory_order_relaxed);
+        break;
+      }
+      local.push_back({en.e, false});
+    }
+  };
+
+  std::vector<std::thread> threads;
+  for (unsigned t = 0; t < nthreads; ++t) threads.emplace_back(worker, t);
+  for (auto& th : threads) th.join();
+
+  size_t total = 0;
+  for (auto& v : perThread) total += v.size();
+  out.total_capped = capped.load(std::memory_order_relaxed);
+  out.total = total;
+
+  out.results.reserve(total);
+  for (auto& v : perThread)
+    for (auto& r : v) out.results.push_back(std::move(r));
+
+  sortResults(out.results, sort);
+  if (limit > 0 && out.results.size() > limit) out.results.resize(limit);
+}
+
+size_t Index::countEx(const std::string& query, bool dirs_only, bool files_only,
+                      const std::string& under, bool& capped) const {
+  capped = false;
+  if (query.empty() || entries_.empty()) return 0;
+
+  const bool isRegex = startsWith(query, "re:");
+  std::regex re;
+  if (isRegex) {
+    const std::string pattern = query.substr(3);
+    if (trim(pattern).empty()) return 0;
+    std::string cerr;
+    if (!compileRegex(pattern, re, cerr)) return 0;
+  }
+  const std::string q = toLow(query);
+  const bool hasWildcard =
+      !isRegex && (q.find('*') != std::string::npos || q.find('?') != std::string::npos);
+  const std::string u = normalizeUnder(under);
+  const size_t cap = candidateCap_;
+
+  unsigned nthreads = std::thread::hardware_concurrency();
+  if (nthreads == 0) nthreads = 2;
+  if (nthreads > 32) nthreads = 32;
+  const size_t n = entries_.size();
+  if (nthreads > n) nthreads = static_cast<unsigned>(n ? n : 1);
+
+  std::atomic<uint64_t> count{0};
+  std::atomic<bool> cappedFlag{false};
+
+  auto worker = [&](unsigned tid) {
+    size_t begin = (n * tid) / nthreads;
+    size_t end = (n * (tid + 1)) / nthreads;
+    for (size_t i = begin; i < end; ++i) {
+      if (count.load(std::memory_order_relaxed) >= cap) {
+        cappedFlag.store(true, std::memory_order_relaxed);
+        break;
+      }
+      const Entry& en = entries_[i];
+      if (!underMatches(en.e.path, u)) continue;
+      if ((dirs_only && !en.e.is_dir) || (files_only && en.e.is_dir)) continue;
+      bool hit;
+      if (isRegex) {
+        try {
+          hit = std::regex_search(en.e.name, re);
+        } catch (const std::regex_error&) {
+          hit = false;
+        }
+      } else if (hasWildcard) {
+        hit = globMatch(q, en.name_low);
+      } else {
+        hit = en.name_low.find(q) != std::string::npos;
+      }
+      if (!hit) continue;
+      uint64_t before = count.fetch_add(1, std::memory_order_relaxed);
+      if (before >= cap) {
+        cappedFlag.store(true, std::memory_order_relaxed);
+        break;
+      }
+    }
+  };
+
+  std::vector<std::thread> threads;
+  for (unsigned t = 0; t < nthreads; ++t) threads.emplace_back(worker, t);
+  for (auto& th : threads) th.join();
+
+  uint64_t matched = count.load(std::memory_order_relaxed);
+  if (matched > cap) matched = cap;
+  capped = cappedFlag.load(std::memory_order_relaxed) || count.load() >= cap;
+  return static_cast<size_t>(matched);
 }
 
 }  // namespace lsearch

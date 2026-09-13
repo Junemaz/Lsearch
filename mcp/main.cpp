@@ -72,6 +72,40 @@ bool doSearch(Session& s, const SearchArgs& a, std::size_t overFetchLimit,
   return false;
 }
 
+// search2：精确 total/total_capped + under。旧 daemon 由 Client 内部降级。
+bool doSearchEx(Session& s, const SearchArgs& a, std::size_t fetchLimit,
+                SearchOutcome& out, std::string& err) {
+  const bool dirsOnly = a.kind == Kind::Dirs;
+  const bool filesOnly = a.kind == Kind::Files;
+  for (int attempt = 0; attempt < 2; ++attempt) {
+    if (!ensureClient(s, err)) return false;
+    SearchOutcome oc;
+    if (s.client.searchEx(a.query, a.sort, fetchLimit, dirsOnly, filesOnly, a.under, oc, err)) {
+      out = std::move(oc);
+      return true;
+    }
+    s.client.close();
+  }
+  return false;
+}
+
+// 旧 daemon 降级路径：legacy search + cap refetch（保留旧的分页/截断语义）。
+bool doLegacyPage(Session& s, const SearchArgs& sa, Page& page, std::string& err) {
+  const std::size_t cap = lsearch::Index::kDefaultCandidateCap;
+  const std::size_t n = overFetch(sa.offset, sa.limit);
+  std::vector<SearchResult> fetched;
+  if (!doSearch(s, sa, n, fetched, err)) return false;
+  if (fetched.size() == n && n < cap) {
+    std::vector<SearchResult> full;
+    if (!doSearch(s, sa, cap, full, err)) return false;
+    fetched = std::move(full);
+  }
+  page = paginate(fetched, sa.offset, sa.limit);
+  applyCapTruncation(page, fetched.size());
+  page.total_is_lower_bound = true;  // legacy：total 未知，勿把 total=0 读成"无命中"
+  return true;
+}
+
 bool doStats(Session& s, std::vector<std::pair<std::string, std::string>>& kv, std::string& err) {
   for (int attempt = 0; attempt < 2; ++attempt) {
     if (!ensureClient(s, err)) return false;
@@ -114,26 +148,31 @@ void handleToolCall(Session& s, const Json& req, const Json& id, bool modern) {
       emit(buildErrorResponse(id, kInvalidParams, perr));
       return;
     }
-    const std::size_t n = overFetch(sa.offset, sa.limit);
-    std::vector<SearchResult> fetched;
     std::string serr;
-    if (!doSearch(s, sa, n, fetched, serr)) {
-      emit(buildResultResponse(id, toolTextResult(actionableError(serr), true, modern)));
-      return;
-    }
-    // Index::search 并行提前终止时结果子集不确定；本页被填满且未到 cap 时改取 cap，
-    // 以获得确定的全局前缀，保证相邻页不重叠。
-    if (fetched.size() == n && n < kMaxFetch) {
-      std::vector<SearchResult> full;
-      std::string ferr;
-      if (!doSearch(s, sa, kMaxFetch, full, ferr)) {
-        emit(buildResultResponse(id, toolTextResult(actionableError(ferr), true, modern)));
+    Page page;
+    bool pageReady = false;
+    if (ensureClient(s, serr) && s.client.supportsV2()) {
+      SearchOutcome oc;
+      if (!doSearchEx(s, sa, sa.offset + sa.limit, oc, serr)) {
+        emit(buildResultResponse(id, toolTextResult(actionableError(serr), true, modern)));
         return;
       }
-      fetched = std::move(full);
+      if (!s.client.usedLegacySearch()) {
+        page = paginateOutcome(oc, sa.offset, sa.limit);
+        pageReady = true;
+      }
     }
-    Page page = paginate(fetched, sa.offset, sa.limit);
-    applyCapTruncation(page, fetched.size());
+    if (!pageReady) {
+      if (!sa.under.empty()) {
+        emit(buildResultResponse(id, toolTextResult(
+            std::string("under is unavailable: ") + kUnderUnsupportedMessage, true, modern)));
+        return;
+      }
+      if (!doLegacyPage(s, sa, page, serr)) {
+        emit(buildResultResponse(id, toolTextResult(actionableError(serr), true, modern)));
+        return;
+      }
+    }
     bool rebuilding = false;
     std::vector<std::pair<std::string, std::string>> kv;
     std::string sterr;

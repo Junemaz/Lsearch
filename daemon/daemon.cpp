@@ -13,7 +13,6 @@
 
 #include <algorithm>
 #include <cerrno>
-#include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <fcntl.h>
@@ -134,6 +133,32 @@ void Daemon::startRebuild() {
   std::thread([this] { rebuildAsync(); }).detach();
 }
 
+namespace {
+constexpr const char* kSupportedCommands =
+    "ping,version,stats,search,search2,count2,capabilities,rebuild,"
+    "add-path,remove-path,shutdown,get-config,set-paths,set-excludes,set-opts";
+
+// under64: "-" = 全量；否则严格 base64。解码后拒绝控制字符（<0x20）。
+bool decodeUnderToken(const std::string& tok, std::string& under) {
+  under.clear();
+  if (tok == "-") return true;
+  std::string decoded;
+  if (!base64Decode(tok, decoded)) return false;
+  for (unsigned char c : decoded)
+    if (c < 0x20) return false;
+  under = std::move(decoded);
+  return true;
+}
+
+void appendRows(const std::vector<SearchResult>& res, std::string& out) {
+  for (const auto& r : res) {
+    out += r.entry.path + "\t" + (r.entry.is_dir ? "1" : "0") + "\t" +
+           std::to_string(r.entry.size) + "\t" + std::to_string(r.entry.mtime) + "\t" +
+           (r.path_matched ? "1" : "0") + "\n";
+  }
+}
+}  // namespace
+
 void Daemon::buildSearchResponse(const std::string& line, std::string& out) {
   std::vector<std::string> head;
   std::string rest;
@@ -163,12 +188,76 @@ void Daemon::buildSearchResponse(const std::string& line, std::string& out) {
     idx_.search(rest, sort, limit, dirs_only, files_only, res, truncated);
   }
   out = "OK " + std::to_string(res.size()) + "\n";
-  for (const auto& r : res) {
-    out += r.entry.path + "\t" + (r.entry.is_dir ? "1" : "0") + "\t" +
-           std::to_string(r.entry.size) + "\t" + std::to_string(r.entry.mtime) + "\t" +
-           (r.path_matched ? "1" : "0") + "\n";
-  }
+  appendRows(res, out);
   out += "END\n";
+}
+
+void Daemon::buildSearchExResponse(const std::string& line, std::string& out) {
+  std::vector<std::string> head;
+  std::string rest;
+  if (!proto::splitHead(line, 6, head, rest)) {
+    out = "ERR bad under\n";
+    return;
+  }
+  size_t limit = static_cast<size_t>(atoll(head[1].c_str()));
+  bool dirs_only = head[2] == "1";
+  bool files_only = head[3] == "1";
+  SortKey sort;
+  if (!sortKeyFromName(head[4], sort)) {
+    out = "ERR bad sort\n";
+    return;
+  }
+  std::string under;
+  if (!decodeUnderToken(head[5], under)) {
+    out = "ERR bad under\n";
+    return;
+  }
+  std::string verr;
+  if (!validateQuery(rest, verr)) {
+    for (char& c : verr)
+      if (c == '\n' || c == '\r') c = ' ';
+    out = "ERR bad regex: " + verr + "\n";
+    return;
+  }
+  SearchOutcome oc;
+  {
+    std::shared_lock<std::shared_mutex> lk(idxLock_);
+    idx_.searchEx(rest, sort, limit, dirs_only, files_only, under, oc);
+  }
+  out = "OK " + std::to_string(oc.results.size()) + " " + std::to_string(oc.total) + " " +
+        (oc.total_capped ? "1" : "0") + "\n";
+  appendRows(oc.results, out);
+  out += "END\n";
+}
+
+void Daemon::buildCountExResponse(const std::string& line, std::string& out) {
+  std::vector<std::string> head;
+  std::string rest;
+  if (!proto::splitHead(line, 4, head, rest)) {
+    out = "ERR bad under\n";
+    return;
+  }
+  bool dirs_only = head[1] == "1";
+  bool files_only = head[2] == "1";
+  std::string under;
+  if (!decodeUnderToken(head[3], under)) {
+    out = "ERR bad under\n";
+    return;
+  }
+  std::string verr;
+  if (!validateQuery(rest, verr)) {
+    for (char& c : verr)
+      if (c == '\n' || c == '\r') c = ' ';
+    out = "ERR bad regex: " + verr + "\n";
+    return;
+  }
+  bool capped = false;
+  size_t total = 0;
+  {
+    std::shared_lock<std::shared_mutex> lk(idxLock_);
+    total = idx_.countEx(rest, dirs_only, files_only, under, capped);
+  }
+  out = "OK " + std::to_string(total) + " " + (capped ? "1" : "0") + "\n";
 }
 
 void Daemon::handleRequest(const std::string& line, std::string& out) {
@@ -205,6 +294,12 @@ void Daemon::handleRequest(const std::string& line, std::string& out) {
     out += "END\n";
   } else if (cmd == "search") {
     buildSearchResponse(line, out);
+  } else if (cmd == "search2") {
+    buildSearchExResponse(line, out);
+  } else if (cmd == "count2") {
+    buildCountExResponse(line, out);
+  } else if (cmd == "capabilities") {
+    out = std::string("OK\ncommands=") + kSupportedCommands + "\nEND\n";
   } else if (cmd == "rebuild") {
     startRebuild();
     out = "OK\n";

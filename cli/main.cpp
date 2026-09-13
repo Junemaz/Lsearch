@@ -2,7 +2,6 @@
 #include "core/entry.h"
 #include "core/util.h"
 #include "ipc/client.h"
-#include "ipc/proto.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -23,6 +22,7 @@ static void printUsage(FILE* f) {
           "  -f, --files-only   只显示文件\n"
           "  -S, --details      显示 类型/大小/时间\n"
           "  -0, --print0       以 NUL 分隔输出（脚本友好）\n"
+          "      --under PATH   仅搜索该路径子树（realpath 规范化，必须存在）\n"
           "  -m, --no-daemon-spawn  不自动拉起守护进程\n"
           "      --stats        显示索引统计\n"
           "      --rebuild      触发重新建索引\n"
@@ -37,6 +37,8 @@ int main(int argc, char** argv) {
   SortKey sort = SortKey::Name;
   bool countOnly = false, dirsOnly = false, filesOnly = false, details = false;
   bool print0 = false, noSpawn = false, showStats = false, doRebuild = false;
+  bool hasUnder = false;
+  std::string underArg;
   std::vector<std::string> positional;
 
   for (int i = 1; i < argc; ++i) {
@@ -61,6 +63,14 @@ int main(int argc, char** argv) {
       print0 = true;
     } else if (a == "-m" || a == "--no-daemon-spawn") {
       noSpawn = true;
+    } else if (a == "--under") {
+      std::string v = next();
+      if (v.empty()) {
+        fprintf(stderr, "--under 需要路径参数\n");
+        return 2;
+      }
+      underArg = v;
+      hasUnder = true;
     } else if (a == "--stats") {
       showStats = true;
     } else if (a == "--rebuild") {
@@ -78,6 +88,17 @@ int main(int argc, char** argv) {
     } else {
       positional.push_back(a);
     }
+  }
+
+  std::string under;
+  if (hasUnder) {
+    char* resolved = realpath(underArg.c_str(), nullptr);
+    if (resolved == nullptr) {
+      fprintf(stderr, "无法解析 --under 路径 '%s'\n", underArg.c_str());
+      return 2;
+    }
+    under = resolved;
+    free(resolved);
   }
 
   Config cfg = Config::load("");
@@ -122,16 +143,33 @@ int main(int argc, char** argv) {
     return 2;
   }
 
-  std::vector<SearchResult> out;
-  size_t total = 0;
-  if (!c.search(query, sort, limit, dirsOnly, filesOnly, out, &total, err)) {
-    fprintf(stderr, "搜索失败: %s\n", err.c_str());
-    return 2;
+  if (countOnly) {
+    uint64_t total = 0;
+    bool capped = false;
+    if (!c.countEx(query, dirsOnly, filesOnly, under, total, capped, err)) {
+      fprintf(stderr, "计数失败: %s\n", err.c_str());
+      return 2;
+    }
+    printf("%llu\n", static_cast<unsigned long long>(total));
+    if (capped) fprintf(stderr, ">= %llu (capped)\n", static_cast<unsigned long long>(total));
+    return total > 0 ? 0 : 1;
   }
 
-  if (countOnly) {
-    printf("%zu\n", total);
-    return total > 0 ? 0 : 1;
+  std::vector<SearchResult> out;
+  if (under.empty()) {
+    // 无 under：走 legacy search 早停快速路径（TUI/GUI 同款语义），避免全量扫描。
+    size_t total = 0;
+    if (!c.search(query, sort, limit, dirsOnly, filesOnly, out, &total, err)) {
+      fprintf(stderr, "搜索失败: %s\n", err.c_str());
+      return 2;
+    }
+  } else {
+    SearchOutcome oc;
+    if (!c.searchEx(query, sort, limit, dirsOnly, filesOnly, under, oc, err)) {
+      fprintf(stderr, "搜索失败: %s\n", err.c_str());
+      return 2;
+    }
+    out = std::move(oc.results);
   }
   if (out.empty()) return 1;
 

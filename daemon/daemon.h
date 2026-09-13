@@ -36,6 +36,8 @@ class Daemon {
  private:
   void handleRequest(const std::string& line, std::string& out);
   void buildSearchResponse(const std::string& line, std::string& out);
+  void buildSearchExResponse(const std::string& line, std::string& out);
+  void buildCountExResponse(const std::string& line, std::string& out);
   void serveConnection(int fd);
 
   void applyWatch(const WatchEvent& ev);

@@ -27,6 +27,8 @@ export HOME="$T/home" XDG_CONFIG_HOME="$T/config" XDG_DATA_HOME="$T/data" XDG_RU
 echo x > "$T/home/docs/AnnualReport.txt"
 echo x > "$T/home/pics/vacation_photo.jpg"
 echo x > "$T/home/readme.md"
+echo x > "$T/home/docs/dup_same.txt"
+echo x > "$T/home/pics/dup_same.txt"
 mkdir -p "$T/home/sub/deeper"; echo x > "$T/home/sub/deeper/archive.tar.gz"
 
 echo "==> 2/ 启动守护进程并建索引"
@@ -43,6 +45,18 @@ if "$L" -m report 2>/dev/null | grep -q "AnnualReport.txt"; then ok "子串搜�
 if "$L" -m '*.jpg' 2>/dev/null | grep -q "vacation_photo.jpg"; then ok "通配符 '*.jpg' → vacation_photo.jpg"; else bad "通配符"; fi
 [ "$("$L" -m --count report 2>/dev/null)" = "1" ] && ok "计数 'report' = 1" || bad "计数 report"
 [ "$("$L" -m --count 'vacation' 2>/dev/null)" = "1" ] && ok "计数 'vacation' = 1" || bad "计数 vacation"
+UNDER_DOCS="$T/home/docs"
+N_ALL="$("$L" -m --count dup_same 2>/dev/null)"
+N_DOCS="$("$L" -m --under "$UNDER_DOCS" --count dup_same 2>/dev/null)"
+if [ "$N_ALL" = "2" ] && [ "$N_DOCS" = "1" ]; then
+  ok "--under 精确计数：全量=2，docs 子树=1"
+else
+  bad "--under 计数（all=$N_ALL docs=$N_DOCS）"
+fi
+UPATH="$("$L" -m --under "$UNDER_DOCS" dup_same 2>/dev/null)"
+[ "$UPATH" = "$UNDER_DOCS/dup_same.txt" ] && ok "搜索 --under 仅输出 docs 子树路径" || bad "--under 搜索（得到：$UPATH）"
+"$L" -m --under /no/such/path dup_same >/dev/null 2>&1; URCP=$?
+[ "$URCP" -eq 2 ] && ok "不存在的 --under 路径 → 退出码 2" || bad "--under 失败退出码（rc=$URCP）"
 if "$L" -m -d -S deeper 2>/dev/null | head -1 | grep -q "	目录"; then ok "仅目录 -d 'deeper' → 类型列=目录"; else bad "仅目录过滤"; fi
 if "$L" -m --sort size -S deeper 2>/dev/null | head -1 | grep -q "	目录"; then ok "按大小排序首行=目录"; else bad "按大小排序"; fi
 "$L" -m __nonexistent_xyz__ >/dev/null 2>&1

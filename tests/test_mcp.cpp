@@ -159,9 +159,56 @@ TEST(mcp_cap_truncation) {
   CHECK(!small.truncated);
 
   Page capped = paginate(f, 0, 2);
-  applyCapTruncation(capped, kMaxFetch);
+  applyCapTruncation(capped, Index::kDefaultCandidateCap);
   CHECK(capped.truncated);
   CHECK_EQ(capped.returned, (size_t)2);
+}
+
+TEST(mcp_paginate_outcome_exact) {
+  SearchOutcome oc;
+  for (int i = 0; i < 5; ++i) {
+    SearchResult r;
+    r.entry.path = "/x/oc" + std::to_string(i);
+    r.entry.name = "oc" + std::to_string(i);
+    oc.results.push_back(r);
+  }
+  oc.total = 5;
+  oc.total_capped = false;
+
+  Page p0 = paginateOutcome(oc, 0, 2);
+  CHECK_EQ(p0.total, (size_t)5);
+  CHECK(!p0.total_capped);
+  CHECK(!p0.total_is_lower_bound);
+  CHECK(!p0.truncated);
+  CHECK(p0.has_more);  // 0+2 < 5
+  CHECK(p0.hint.empty());
+  Page p2 = paginateOutcome(oc, 4, 2);
+  CHECK_EQ(p2.returned, (size_t)1);
+  CHECK(!p2.has_more);  // 4+1 == 5
+  Page beyond = paginateOutcome(oc, 5, 2);
+  CHECK_EQ(beyond.returned, (size_t)0);
+  CHECK(!beyond.has_more);
+}
+
+TEST(mcp_paginate_outcome_capped) {
+  SearchOutcome oc;
+  for (int i = 0; i < 3; ++i) {
+    SearchResult r;
+    r.entry.path = "/x/cap" + std::to_string(i);
+    oc.results.push_back(r);
+  }
+  oc.total = 7;  // 下界
+  oc.total_capped = true;
+
+  Page p = paginateOutcome(oc, 0, 2);
+  CHECK_EQ(p.total, (size_t)7);
+  CHECK(p.total_capped);
+  CHECK(p.total_is_lower_bound);
+  CHECK(p.truncated);
+  CHECK(!p.has_more);  // capped 时无可继续页
+  CHECK(!p.hint.empty());
+  CHECK(p.hint.find("at least") != std::string::npos);  // 恰好 == cap 不可区分 → 诚实用词
+  CHECK(p.hint.find("under") != std::string::npos);
 }
 
 TEST(mcp_parse_args) {
@@ -220,11 +267,71 @@ TEST(mcp_parse_args) {
 
   Json extra = Json::object();
   extra.set("query", Json::str("q"));
-  extra.set("under", Json::str("/tmp"));
+  extra.set("bogus", Json::str("x"));
   CHECK(!parseSearchArgs(extra, sa, err));
 
   Json notObj = Json::makeNull();
   CHECK(!parseSearchArgs(notObj, sa, err));
+}
+
+TEST(mcp_parse_under_args) {
+  SearchArgs sa;
+  std::string err;
+  Json ok = Json::object();
+  ok.set("query", Json::str("q"));
+  ok.set("under", Json::str("/data"));
+  CHECK(parseSearchArgs(ok, sa, err));
+  CHECK_EQ(sa.under, std::string("/data"));
+
+  Json root = Json::object();
+  root.set("query", Json::str("q"));
+  root.set("under", Json::str("/"));
+  SearchArgs sr;
+  CHECK(parseSearchArgs(root, sr, err));
+  CHECK_EQ(sr.under, std::string("/"));
+
+  Json absent = Json::object();
+  absent.set("query", Json::str("q"));
+  SearchArgs sd;
+  CHECK(parseSearchArgs(absent, sd, err));
+  CHECK(sd.under.empty());
+
+  Json dash = Json::object();
+  dash.set("query", Json::str("q"));
+  dash.set("under", Json::str("-"));
+  CHECK(!parseSearchArgs(dash, sa, err));
+
+  Json rel = Json::object();
+  rel.set("query", Json::str("q"));
+  rel.set("under", Json::str("data"));
+  CHECK(!parseSearchArgs(rel, sa, err));
+
+  Json empty = Json::object();
+  empty.set("query", Json::str("q"));
+  empty.set("under", Json::str(""));
+  CHECK(!parseSearchArgs(empty, sa, err));
+
+  Json nul = Json::object();
+  nul.set("query", Json::str("q"));
+  nul.set("under", Json::str(std::string("/a\0b", 4)));
+  CHECK(!parseSearchArgs(nul, sa, err));
+
+  Json type = Json::object();
+  type.set("query", Json::str("q"));
+  type.set("under", Json::integer(3));
+  CHECK(!parseSearchArgs(type, sa, err));
+
+  std::string longPath = "/" + std::string(4096, 'a');
+  Json over = Json::object();
+  over.set("query", Json::str("q"));
+  over.set("under", Json::str(longPath));
+  CHECK(!parseSearchArgs(over, sa, err));
+
+  std::string okPath = "/" + std::string(4000, 'a');
+  Json within = Json::object();
+  within.set("query", Json::str("q"));
+  within.set("under", Json::str(okPath));
+  CHECK(parseSearchArgs(within, sa, err));
 }
 
 TEST(mcp_tool_mapping) {
