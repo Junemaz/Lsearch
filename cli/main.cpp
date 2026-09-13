@@ -2,9 +2,7 @@
 #include "core/entry.h"
 #include "core/util.h"
 #include "ipc/client.h"
-#include "ipc/proto.h"
 
-#include <climits>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -94,12 +92,13 @@ int main(int argc, char** argv) {
 
   std::string under;
   if (hasUnder) {
-    char resolved[PATH_MAX];
-    if (realpath(underArg.c_str(), resolved) == nullptr) {
+    char* resolved = realpath(underArg.c_str(), nullptr);
+    if (resolved == nullptr) {
       fprintf(stderr, "无法解析 --under 路径 '%s'\n", underArg.c_str());
       return 2;
     }
     under = resolved;
+    free(resolved);
   }
 
   Config cfg = Config::load("");
@@ -156,12 +155,22 @@ int main(int argc, char** argv) {
     return total > 0 ? 0 : 1;
   }
 
-  SearchOutcome oc;
-  if (!c.searchEx(query, sort, limit, dirsOnly, filesOnly, under, oc, err)) {
-    fprintf(stderr, "搜索失败: %s\n", err.c_str());
-    return 2;
+  std::vector<SearchResult> out;
+  if (under.empty()) {
+    // 无 under：走 legacy search 早停快速路径（TUI/GUI 同款语义），避免全量扫描。
+    size_t total = 0;
+    if (!c.search(query, sort, limit, dirsOnly, filesOnly, out, &total, err)) {
+      fprintf(stderr, "搜索失败: %s\n", err.c_str());
+      return 2;
+    }
+  } else {
+    SearchOutcome oc;
+    if (!c.searchEx(query, sort, limit, dirsOnly, filesOnly, under, oc, err)) {
+      fprintf(stderr, "搜索失败: %s\n", err.c_str());
+      return 2;
+    }
+    out = std::move(oc.results);
   }
-  std::vector<SearchResult>& out = oc.results;
   if (out.empty()) return 1;
 
   const char sep = print0 ? '\0' : '\n';
