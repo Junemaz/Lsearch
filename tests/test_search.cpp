@@ -299,13 +299,18 @@ TEST(search_ex_under_no_match) {
 TEST(search_ex_under_all_variants) {
   Index idx;
   idx.build(underSample());
-  SearchOutcome a, b, c;
+  SearchOutcome a, b, c, d, e;
   idx.searchEx("report", SortKey::Path, 0, false, false, "", a);
   idx.searchEx("report", SortKey::Path, 0, false, false, "/", b);
   idx.searchEx("report", SortKey::Path, 0, false, false, "-", c);
+  // 规范化：连续/多余斜杠折叠为 "/"（=全量）；已在 Spec 010 R1 明确记录。
+  idx.searchEx("report", SortKey::Path, 0, false, false, "//", d);
+  idx.searchEx("report", SortKey::Path, 0, false, false, "///", e);
   CHECK_EQ(a.total, (uint64_t)6);
   CHECK_EQ(b.total, (uint64_t)6);
   CHECK_EQ(c.total, (uint64_t)6);
+  CHECK_EQ(d.total, (uint64_t)6);
+  CHECK_EQ(e.total, (uint64_t)6);
 }
 
 TEST(search_ex_under_trailing_slash) {
@@ -368,6 +373,27 @@ TEST(search_ex_cap_flags_membership) {
   CHECK_EQ(out.total, (uint64_t)3);
   CHECK(out.results.size() <= 3);
   for (const auto& r : out.results) CHECK(r.entry.path.rfind("/c/", 0) == 0);
+  idx.setCandidateCapForTest(old);
+}
+
+TEST(search_ex_exact_cap_conservative) {
+  // 恰好 == cap 个匹配也无法与"还有更多"区分：扫描在 cap 处停止 → 保守标记 capped。
+  // 仅断言 flags + membership（Flaky 规则）。
+  std::vector<FileEntry> v;
+  for (int i = 0; i < 4; ++i)
+    v.push_back({"/c/match" + std::to_string(i), "match" + std::to_string(i), 1, i, false,
+                 static_cast<uint64_t>(i)});
+  for (int i = 0; i < 96; ++i)
+    v.push_back({"/c/other" + std::to_string(i), "other" + std::to_string(i), 1, i, false,
+                 static_cast<uint64_t>(i)});
+  Index idx;
+  idx.build(std::move(v));
+  const size_t old = idx.setCandidateCapForTest(4);
+  SearchOutcome out;
+  idx.searchEx("match", SortKey::Name, 0, false, false, "", out);
+  CHECK(out.total_capped);
+  CHECK_EQ(out.total, (uint64_t)4);
+  for (const auto& r : out.results) CHECK(startsWith(r.entry.name, "match"));
   idx.setCandidateCapForTest(old);
 }
 

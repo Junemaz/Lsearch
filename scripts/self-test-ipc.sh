@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# Lsearch IPC 协议 v2 端到端自测（Unix socket 明文协议，P1–P13）
+# Lsearch IPC 协议 v2 端到端自测（Unix socket 明文协议，P1–P18）
 #   ./scripts/self-test-ipc.sh        # 自动构建后跑全部
 #   ./scripts/self-test-ipc.sh -s     # 跳过构建，使用现有 build/
 # 覆盖：capabilities / search2（含 under）/ count2 / 非法与超长 base64 / 控制字符 /
-#       缺字段 / 非法正则 / 旧 search 响应格式不变。
+#       缺字段 / 非法正则 / 旧 search 响应格式不变 /
+#       旧 daemon 降级（无 under 静默降级、有 under 显式报错，CLI 与 MCP）。
 # 说明：守护进程与客户端须同 shell 环境；隔离 HOME/XDG_*；python3 仅作 socket 驱动。
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -209,6 +210,142 @@ printf '%s\n' "$OUT"
 PASS=$(printf '%s\n' "$OUT" | grep -c '^  PASS' || true)
 FAIL=$(printf '%s\n' "$OUT" | grep -c '^  FAIL' || true)
 if [ "$RC" -ne 0 ] && [ "$FAIL" -eq 0 ]; then echo "  FAIL  driver 异常退出（rc=$RC）"; FAIL=1; fi
+
+echo "==> 4/ 旧 daemon 降级（fake stub，P14–P18）"
+mkdir -p "$T/stub-run"
+cat > "$T/stub.py" <<'PYEOF'
+import json, os, socket, subprocess, sys, threading, time
+
+ROOT = os.environ["ROOT"]
+SOCK = os.environ["STUB_SOCK"]
+CLI = os.path.join(ROOT, "build", "lsearch")
+MCP = os.path.join(ROOT, "build", "lsearch-mcp")
+
+passed = 0
+failed = 0
+def ok(name, msg=""):
+    global passed; passed += 1; print(f"  PASS  {name} {msg}".rstrip())
+def bad(name, msg=""):
+    global failed; failed += 1; print(f"  FAIL  {name} {msg}".rstrip())
+
+def serve():
+    srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        os.unlink(SOCK)
+    except OSError:
+        pass
+    srv.bind(SOCK)
+    srv.listen(16)
+    while True:
+        try:
+            c, _ = srv.accept()
+        except OSError:
+            return
+        f = c.makefile("rwb")
+        try:
+            while True:
+                line = f.readline()
+                if not line:
+                    break
+                cmd = line.decode(errors="replace").strip()
+                if cmd == "ping":
+                    resp = "OK pong\n"
+                elif cmd.startswith("search "):
+                    resp = "OK 1\n/tmp/stub_hit.txt\t0\t7\t12345\t0\nEND\n"
+                else:
+                    resp = "ERR unknown command\n"
+                f.write(resp.encode())
+                f.flush()
+        except OSError:
+            pass
+        finally:
+            c.close()
+
+os.makedirs(os.path.dirname(SOCK), exist_ok=True)
+t = threading.Thread(target=serve, daemon=True)
+t.start()
+for _ in range(100):
+    if os.path.exists(SOCK):
+        break
+    time.sleep(0.05)
+
+env = dict(os.environ)
+
+def cli(args):
+    return subprocess.run([CLI, "-m"] + args, capture_output=True, text=True, env=env)
+
+# P14: 无 under → legacy search 正常（静默降级保留）
+try:
+    r = cli(["foo"])
+    okv = r.returncode == 0 and "/tmp/stub_hit.txt" in r.stdout
+    (ok if okv else bad)("P14", "旧 daemon 无 under → 普通 search 成功（降级保留）"
+                        if okv else f"rc={r.returncode} out={r.stdout!r} err={r.stderr!r}")
+except Exception as e:
+    bad("P14", f"exception: {e}")
+
+# P15: under + 旧 daemon → 显式失败（不静默丢弃）
+try:
+    r = cli(["--under", "/tmp", "foo"])
+    okv = r.returncode == 2 and "does not support 'under'" in r.stderr
+    (ok if okv else bad)("P15", "旧 daemon + under 搜索 → 退出 2 + 可操作错误"
+                        if okv else f"rc={r.returncode} err={r.stderr!r}")
+except Exception as e:
+    bad("P15", f"exception: {e}")
+
+# P16: under + --count + 旧 daemon → 显式失败
+try:
+    r = cli(["--under", "/tmp", "--count", "foo"])
+    okv = r.returncode == 2 and "does not support 'under'" in r.stderr
+    (ok if okv else bad)("P16", "旧 daemon + under --count → 退出 2 + 可操作错误"
+                        if okv else f"rc={r.returncode} err={r.stderr!r}")
+except Exception as e:
+    bad("P16", f"exception: {e}")
+
+def mcp_call(args):
+    p = subprocess.Popen([MCP], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                         stderr=subprocess.DEVNULL, env=env)
+    req = {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+           "params": {"name": "search_files", "arguments": args}}
+    out, _ = p.communicate((json.dumps(req) + "\n").encode(), timeout=30)
+    return json.loads(out.decode().splitlines()[0])
+
+# P17: MCP under + 旧 daemon → isError:true + 可操作错误
+try:
+    r = mcp_call({"query": "foo", "under": "/tmp"})
+    res = r.get("result") or {}
+    text = res.get("content", [{}])[0].get("text", "")
+    okv = res.get("isError") is True and "does not support 'under'" in text
+    (ok if okv else bad)("P17", "MCP 旧 daemon + under → isError:true"
+                        if okv else f"{r}")
+except Exception as e:
+    bad("P17", f"exception: {e}")
+
+# P18: MCP 无 under + 旧 daemon → 正常；legacy page.total_is_lower_bound=true
+try:
+    r = mcp_call({"query": "foo"})
+    res = r.get("result") or {}
+    payload = json.loads(res["content"][0]["text"])
+    okv = (res.get("isError") is False and payload["page"]["total_is_lower_bound"] is True
+           and payload["results"][0]["path"] == "/tmp/stub_hit.txt")
+    (ok if okv else bad)("P18", "MCP 旧 daemon 无 under → 成功 + total_is_lower_bound=true"
+                        if okv else f"{payload['page']}")
+except Exception as e:
+    bad("P18", f"exception: {e}")
+
+print(f"  [stub-driver] passed={passed} failed={failed}")
+sys.exit(1 if failed else 0)
+PYEOF
+
+export STUB_SOCK="$T/stub-run/lsearch.sock"
+OLD_RUNTIME="$XDG_RUNTIME_DIR"
+export XDG_RUNTIME_DIR="$T/stub-run"
+OUT2="$(python3 "$T/stub.py" 2>&1)"; RC2=$?
+printf '%s\n' "$OUT2"
+P2=$(printf '%s\n' "$OUT2" | grep -c '^  PASS' || true)
+F2=$(printf '%s\n' "$OUT2" | grep -c '^  FAIL' || true)
+PASS=$((PASS + P2)); FAIL=$((FAIL + F2))
+if [ "$RC2" -ne 0 ] && [ "$F2" -eq 0 ]; then echo "  FAIL  stub driver 异常退出（rc=$RC2）"; FAIL=$((FAIL + 1)); fi
+export XDG_RUNTIME_DIR="$OLD_RUNTIME"
 
 echo
 echo "=============================================="

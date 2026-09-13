@@ -207,6 +207,7 @@ TEST(mcp_paginate_outcome_capped) {
   CHECK(p.truncated);
   CHECK(!p.has_more);  // capped 时无可继续页
   CHECK(!p.hint.empty());
+  CHECK(p.hint.find("at least") != std::string::npos);  // 恰好 == cap 不可区分 → 诚实用词
   CHECK(p.hint.find("under") != std::string::npos);
 }
 

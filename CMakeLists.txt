@@ -140,6 +140,7 @@ if(BUILD_TESTS)
     tests/test_search.cpp
     tests/test_db.cpp
     tests/test_mcp.cpp
+    tests/test_client.cpp
     tests/test_dbus.cpp
   )
   target_link_libraries(lsearch_tests PRIVATE lsearch_core lsearch_mcp_lib lsearch_dbus_lib)
