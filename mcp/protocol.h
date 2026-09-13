@@ -64,7 +64,9 @@ Page paginate(const std::vector<lsearch::SearchResult>& fetched, std::size_t off
 // refetch 命中 cap 时标记本页截断（>cap 的精确分页受引擎候选上限限制）。
 void applyCapTruncation(Page& page, std::size_t fetchedCount);
 
-// modern stateless 元数据校验：请求带 params._meta 时，必须含协议版本与客户端能力。
+// modern stateless 元数据校验：仅当 params._meta 含 io.modelcontextprotocol/protocolVersion
+// 时视为 modern 请求（此时必须同时含 clientCapabilities）；缺失或仅含其它键
+//（如 legacy progressToken）一律按 legacy 容忍，避免误拒存量客户端。
 struct ModernMeta {
   bool hasMeta = false;
   bool valid = false;

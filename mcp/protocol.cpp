@@ -220,15 +220,12 @@ ModernMeta checkModernMeta(const Json& request) {
   const Json* params = request.find("params");
   if (!params || !params->isObject()) return m;
   const Json* meta = params->find("_meta");
-  if (!meta) return m;
-  m.hasMeta = true;
-  if (!meta->isObject()) {
-    m.error = "_meta must be an object";
-    return m;
-  }
+  if (!meta || !meta->isObject()) return m;  // 缺失/非对象 → legacy 容忍
   const Json* pv = meta->find("io.modelcontextprotocol/protocolVersion");
-  if (!pv || !pv->isString() || pv->asString().empty()) {
-    m.error = "_meta.io.modelcontextprotocol/protocolVersion is required";
+  if (!pv) return m;  // 无 modern 命名空间键（如 legacy progressToken）→ 按 legacy 处理
+  m.hasMeta = true;
+  if (!pv->isString() || pv->asString().empty()) {
+    m.error = "_meta.io.modelcontextprotocol/protocolVersion must be a non-empty string";
     return m;
   }
   const Json* caps = meta->find("io.modelcontextprotocol/clientCapabilities");
