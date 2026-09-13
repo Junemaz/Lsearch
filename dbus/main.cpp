@@ -2,6 +2,7 @@
 // 仅复用 ipc/client，不触碰 core/daemon/socket 协议；单线程事件循环（poll + libdbus）。
 // 生命周期：按需激活，会话总线断开或收到 SIGTERM/SIGINT 时释放名字并退出 0，绝不停止 lsearchd。
 #include "core/config.h"
+#include "core/search.h"
 #include "core/util.h"
 #include "dbus/logic.h"
 #include "ipc/client.h"
@@ -215,10 +216,10 @@ DBusHandlerResult handleSearch(Bridge& b, DBusConnection* conn, DBusMessage* msg
   }
   // Index::search 并行提前终止时结果子集不确定；本页被填满且未到 cap 时改取 cap，
   // 以获得确定的全局前缀，保证相邻页不重叠（与 MCP 的 refetch 行为一致）。
-  if (fetched.size() == n && n < mcp::kMaxFetch) {
+  if (fetched.size() == n && n < Index::kDefaultCandidateCap) {
     std::vector<SearchResult> full;
     std::string ferr;
-    if (!doSearch(b, sa, mcp::kMaxFetch, full, ferr)) {
+    if (!doSearch(b, sa, Index::kDefaultCandidateCap, full, ferr)) {
       sendError(conn, msg, kErrDaemonUnavailable, unavailableText(ferr));
       return DBUS_HANDLER_RESULT_HANDLED;
     }
