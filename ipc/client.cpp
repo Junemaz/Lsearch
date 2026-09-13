@@ -169,6 +169,19 @@ bool Client::search(const std::string& query, SortKey sort, size_t limit,
   return true;
 }
 
+bool Client::searchLegacyFallback(const std::string& query, SortKey sort, size_t limit,
+                                  bool dirs_only, bool files_only, SearchOutcome& out,
+                                  std::string& err) {
+  lastSearchLegacy_ = true;
+  std::vector<SearchResult> res;
+  size_t total = 0;
+  if (!search(query, sort, limit, dirs_only, files_only, res, &total, err)) return false;
+  out.results = std::move(res);
+  out.total = total;
+  out.total_capped = false;
+  return true;
+}
+
 bool Client::searchEx(const std::string& query, SortKey sort, size_t limit,
                       bool dirs_only, bool files_only, const std::string& under,
                       SearchOutcome& out, std::string& err) {
@@ -176,6 +189,15 @@ bool Client::searchEx(const std::string& query, SortKey sort, size_t limit,
   out.total = 0;
   out.total_capped = false;
   lastSearchLegacy_ = false;
+
+  // v2 已确认不可用：空 under 走 legacy 兜底；非空 under 绝不能静默丢弃。
+  if (v2_ == 0) {
+    if (!under.empty()) {
+      err = kUnderUnsupportedMessage;
+      return false;
+    }
+    return searchLegacyFallback(query, sort, limit, dirs_only, files_only, out, err);
+  }
 
   const std::string under64 = under.empty() ? "-" : base64Encode(under);
   const std::string req = "search2 " + std::to_string(limit) + " " + (dirs_only ? "1" : "0") +
@@ -188,14 +210,11 @@ bool Client::searchEx(const std::string& query, SortKey sort, size_t limit,
   if (!readLine(line, eof, err)) return false;
   if (line == "ERR unknown command") {
     v2_ = 0;
-    lastSearchLegacy_ = true;
-    std::vector<SearchResult> res;
-    size_t total = 0;
-    if (!search(query, sort, limit, dirs_only, files_only, res, &total, err)) return false;
-    out.results = std::move(res);
-    out.total = total;
-    out.total_capped = false;
-    return true;
+    if (!under.empty()) {
+      err = kUnderUnsupportedMessage;
+      return false;
+    }
+    return searchLegacyFallback(query, sort, limit, dirs_only, files_only, out, err);
   }
   if (!startsWith(line, "OK")) {
     err = line;
@@ -231,11 +250,28 @@ bool Client::searchEx(const std::string& query, SortKey sort, size_t limit,
   return true;
 }
 
+bool Client::countLegacyFallback(const std::string& query, bool dirs_only, bool files_only,
+                                 uint64_t& total, bool& capped, std::string& err) {
+  std::vector<SearchResult> res;
+  size_t n = 0;
+  if (!search(query, SortKey::Name, 0, dirs_only, files_only, res, &n, err)) return false;
+  total = n;
+  capped = n >= Index::kDefaultCandidateCap;
+  return true;
+}
+
 bool Client::countEx(const std::string& query, bool dirs_only, bool files_only,
                      const std::string& under, uint64_t& total, bool& capped,
                      std::string& err) {
   total = 0;
   capped = false;
+  if (v2_ == 0) {
+    if (!under.empty()) {
+      err = kUnderUnsupportedMessage;
+      return false;
+    }
+    return countLegacyFallback(query, dirs_only, files_only, total, capped, err);
+  }
   const std::string under64 = under.empty() ? "-" : base64Encode(under);
   const std::string req = "count2 " + std::string(dirs_only ? "1" : "0") + " " +
                           (files_only ? "1" : "0") + " " + under64 + " " + query;
@@ -246,12 +282,11 @@ bool Client::countEx(const std::string& query, bool dirs_only, bool files_only,
   if (!readLine(line, eof, err)) return false;
   if (line == "ERR unknown command") {
     v2_ = 0;
-    std::vector<SearchResult> res;
-    size_t n = 0;
-    if (!search(query, SortKey::Name, 0, dirs_only, files_only, res, &n, err)) return false;
-    total = n;
-    capped = n >= Index::kDefaultCandidateCap;
-    return true;
+    if (!under.empty()) {
+      err = kUnderUnsupportedMessage;
+      return false;
+    }
+    return countLegacyFallback(query, dirs_only, files_only, total, capped, err);
   }
   if (!startsWith(line, "OK")) {
     err = line;
@@ -285,15 +320,18 @@ bool Client::supportsV2() {
   if (v2_ >= 0) return v2_ == 1;
   std::vector<std::string> cmds;
   std::string err;
-  v2_ = 0;
-  if (capabilities(cmds, err)) {
-    for (const auto& c : cmds) {
-      if (c == "search2") {
-        v2_ = 1;
-        break;
-      }
+  if (!capabilities(cmds, err)) {
+    if (err == "ERR unknown command") v2_ = 0;  // 旧 daemon：确定性不可用
+    return false;  // 瞬时错误不缓存（v2_ 保持 -1），下次调用重试
+  }
+  bool hasSearch2 = false;
+  for (const auto& c : cmds) {
+    if (c == "search2") {
+      hasSearch2 = true;
+      break;
     }
   }
+  v2_ = hasSearch2 ? 1 : 0;  // capabilities 成功即为确定性结论
   return v2_ == 1;
 }
 
