@@ -102,6 +102,7 @@ bool doLegacyPage(Session& s, const SearchArgs& sa, Page& page, std::string& err
   }
   page = paginate(fetched, sa.offset, sa.limit);
   applyCapTruncation(page, fetched.size());
+  page.total_is_lower_bound = true;  // legacy：total 未知，勿把 total=0 读成"无命中"
   return true;
 }
 
@@ -161,9 +162,16 @@ void handleToolCall(Session& s, const Json& req, const Json& id, bool modern) {
         pageReady = true;
       }
     }
-    if (!pageReady && !doLegacyPage(s, sa, page, serr)) {
-      emit(buildResultResponse(id, toolTextResult(actionableError(serr), true, modern)));
-      return;
+    if (!pageReady) {
+      if (!sa.under.empty()) {
+        emit(buildResultResponse(id, toolTextResult(
+            std::string("under is unavailable: ") + kUnderUnsupportedMessage, true, modern)));
+        return;
+      }
+      if (!doLegacyPage(s, sa, page, serr)) {
+        emit(buildResultResponse(id, toolTextResult(actionableError(serr), true, modern)));
+        return;
+      }
     }
     bool rebuilding = false;
     std::vector<std::pair<std::string, std::string>> kv;

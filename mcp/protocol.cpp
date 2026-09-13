@@ -260,7 +260,7 @@ Page paginateOutcome(const lsearch::SearchOutcome& outcome, std::size_t offset,
   p.total_is_lower_bound = outcome.total_capped;
   p.truncated = outcome.total_capped;
   if (outcome.total_capped) {
-    p.hint = "more than " + std::to_string(outcome.total) +
+    p.hint = "at least " + std::to_string(outcome.total) +
              " matches; narrow the query or add under";
   }
   std::size_t end = offset + limit;
