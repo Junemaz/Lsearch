@@ -36,6 +36,18 @@ add_library(lsearch_ipc STATIC
 target_include_directories(lsearch_ipc PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(lsearch_ipc PUBLIC lsearch_core)
 
+# ---- mcp (stdio MCP 前端，复用 ipc/client) ----
+add_library(lsearch_mcp_lib STATIC
+  mcp/json.cpp
+  mcp/protocol.cpp
+)
+target_include_directories(lsearch_mcp_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(lsearch_mcp_lib PUBLIC lsearch_ipc lsearch_core)
+
+add_executable(lsearch-mcp mcp/main.cpp)
+target_link_libraries(lsearch-mcp PRIVATE lsearch_mcp_lib lsearch_ipc lsearch_core)
+install(TARGETS lsearch-mcp RUNTIME DESTINATION bin)
+
 # ---- daemon ----
 add_executable(lsearchd daemon/main.cpp daemon/daemon.cpp)
 target_link_libraries(lsearchd PRIVATE lsearch_core lsearch_ipc)
@@ -104,8 +116,9 @@ if(BUILD_TESTS)
     tests/test_config.cpp
     tests/test_search.cpp
     tests/test_db.cpp
+    tests/test_mcp.cpp
   )
-  target_link_libraries(lsearch_tests PRIVATE lsearch_core)
+  target_link_libraries(lsearch_tests PRIVATE lsearch_core lsearch_mcp_lib)
   add_test(NAME lsearch_tests COMMAND lsearch_tests)
 endif()
 

@@ -22,7 +22,7 @@ Lsearch 是一款参考 Windows 版 **Everything** 打造的文件名即时搜�
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j"$(nproc)"
 ```
-产物：`build/lsearchd`、`build/lsearch`、`build/lsearch-tui`、`build/lsearch_tests`
+产物：`build/lsearchd`、`build/lsearch`、`build/lsearch-tui`、`build/lsearch-mcp`、`build/lsearch_tests`
 
 ## 快速开始
 ```bash
@@ -48,6 +48,11 @@ lsearch-tui                      # 输入即搜；↑↓ 选择，Enter 打开�
 ```bash
 ./scripts/self-test.sh          # 自动构建后跑全部 19 项
 ./scripts/self-test.sh -s       # 跳过构建，直接用现有 build/
+```
+MCP 前端自测（stdio JSON-RPC，S1–S9；需 python3）：
+```bash
+./scripts/self-test-mcp.sh      # 自动构建后跑全部 25 项
+./scripts/self-test-mcp.sh -s   # 跳过构建
 ```
 TUI 自动化自测（tmux 伪终端注入按键并断言画面；需装 tmux）：
 ```bash
