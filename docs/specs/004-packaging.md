@@ -1,6 +1,6 @@
 # Lsearch Spec 004 — 打包与多架构
 
-Status: **Done**（deb 已验证） / rpm 与多架构待目标环境验证
+Status: **Done**（deb/rpm 构建均已实测） / 多架构待目标环境验证
 
 ## Why
 面向麒麟 V10 等信创环境交付，需要标准安装包（rpm/deb），并覆盖 x86_64 与 aarch64
@@ -31,7 +31,7 @@ Then `/usr/bin/lsearch`、`lsearchd`、`lsearch-tui` 就位，直接 `lsearch xx
 
 ## Task
 - [x] build-deb.sh（已在 Ubuntu 实测产出并 `dpkg-deb -I` 校验）
-- [x] build-rpm.sh + lsearch.spec（脚本就绪）
+- [x] build-rpm.sh + lsearch.spec（Ubuntu rpmbuild 6.0.1 实测产出 rpm）
 - [ ] aarch64 交叉编译工具链 + sysroot（依赖信创环境，未完成）
 
 ## Deliverable
@@ -41,4 +41,6 @@ Then `/usr/bin/lsearch`、`lsearchd`、`lsearch-tui` 就位，直接 `lsearch xx
 - 实测 `./packaging/build-deb.sh` 产出 `packaging/lsearch_0.1.0-1_amd64.deb`
 - `dpkg-deb -I` 校验：Package/Version/Architecture=amd64/Depends 均正确
 - `dpkg-deb -c` 校验：`/usr/bin/lsearch*` 与 `/usr/share/lsearch/*` 在包内
-- rpm / aarch64 需相应发行版与工具链环境（CI 落地项）
+- rpm 实测（Ubuntu + rpmbuild 6.0.1）：`./packaging/build-rpm.sh` 产出
+  `lsearch-0.1.0-1.x86_64.rpm`；`rpm -qlp` 含 5 个二进制，`rpm -qpR` 含 qt5-qtbase 等依赖
+- aarch64 需交叉工具链与 sysroot（CI 落地项）

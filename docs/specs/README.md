@@ -17,8 +17,8 @@
 | [001-index-core](001-index-core.md) | 索引核心：遍历 / DB / inotify 增量 | **Done** | `lsearch_tests`、冒烟 |
 | [002-search-ipc](002-search-ipc.md) | 检索语义 + IPC 协议 | **Done** | `lsearch_tests`、冒烟 |
 | [003-cli-tui](003-cli-tui.md) | CLI 与 TUI 前端 | **Done** | 端到端冒烟 |
-| [004-packaging](004-packaging.md) | deb/rpm 打包、多架构 | **Done**(deb) / 待验证(rpm) | `packaging/*.deb` |
-| [005-gui-v2](005-gui-v2.md) | V2：Qt5 GUI | **In Progress**（仅剩打包集成） | offscreen 冒烟、WSLg 人工验证 |
+| [004-packaging](004-packaging.md) | deb/rpm 打包、多架构 | **Done**(deb/rpm 构建实测) / 多架构待验证 | `packaging/*.deb`、`*.rpm` |
+| [005-gui-v2](005-gui-v2.md) | V2：Qt5 GUI | **Done**（麒麟实机安装待验证） | offscreen 冒烟、WSLg 验证、deb/rpm 含 GUI |
 | [006-lsearch-mcp](006-lsearch-mcp.md) | MCP 前端（stdio，LLM 编码代理） | **Done** | `lsearch_tests` 267、`self-test-mcp.sh` 29/29 |
 | [007-daemon-singleton](007-daemon-singleton.md) | 守护进程单例锁（并发启动竞态） | **Done** | `scripts/self-test.sh` 22/22（含单例 4 项） |
 | [008-regex](008-regex.md) | V3：正则匹配（`re:` 前缀，ECMAScript） | **Done** | `lsearch_tests` 267、`self-test.sh` 22/22、`self-test-mcp.sh` 29/29 |

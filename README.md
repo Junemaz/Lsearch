@@ -2,7 +2,7 @@
 
 Lsearch 是一款参考 Windows 版 **Everything** 打造的文件名即时搜索工具，专为
 麒麟（Kylin V10）等信创桌面环境设计，采用 **C++17 + Qt5 + SQLite + inotify**
-技术栈，支持 **TUI 与 GUI** 两种前端（V1 交付 TUI，GUI 预留）。
+技术栈，支持 **CLI / TUI / GUI / MCP** 多前端（共享同一守护进程与索引）。
 
 > Everything 之所以快，是因为 NTFS 的 MFT + USN 日志免费提供了文件名索引；
 > Linux 的 ext4 没有等价物，因此 Lsearch 必须**自建索引**：首次全量遍历 +
