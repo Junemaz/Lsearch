@@ -96,8 +96,8 @@ Then 行为与引入正则前一致
 ## Evidence
 - 构建（C++17，`-Wall -Wextra` 零告警）：
   `cmake --build build -j"$(nproc)"`（强制重编改动文件后 grep warning/error 为空）。
-- 单测 `./build/lsearch_tests` → **267 checks / 0 failures**（首版 218 → 237 → Oracle 修复后 256
-  → 测试去 flaky 后 263 → MCP 互操作修复后 267）。
+- 单测 `./build/lsearch_tests` → **334 checks / 0 failures**（首版 218 → 237 → Oracle 修复后 256
+  → 测试去 flaky 后 263 → MCP 互操作修复后 267 → D-Bus 桥接（Spec 009）后 334）。
   新增/相关用例：`search_regex_anchored`（`re:^AnnualReport\d{4}\.txt$` 仅命中
   `AnnualReport2026.txt`）、`search_regex_case_insensitive`（`re:ANNUALREPORT` 命中 2 个）、
   `search_validate_query`（`re:[` 返回 false + 非空 message；空/空白 `re:` 与非 `re:` 查询合法）、

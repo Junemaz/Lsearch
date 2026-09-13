@@ -20,9 +20,12 @@ NTFS 的 MFT + USN 日志——文件名索引由文件系统免费维护。Linu
                 │  └ core/search   内存热索引       │
                 └──────────────┬────────────────┘
                                │ Unix domain socket（明文行协议）
-        ┌──────────────────────┼──────────────────────┐
-        ▼                      ▼                      ▼
-   CLI (lsearch)          TUI (lsearch-tui)      GUI (Qt5)
+        ┌──────────────┬───────┴───────┬──────────────┐
+        ▼              ▼               ▼              ▼
+   CLI (lsearch)  TUI (lsearch-tui)  GUI (Qt5)   MCP (lsearch-mcp)
+                                                       │
+                              D-Bus 门面 lsearch-dbus ──┘  （会话总线 com.lsearch.Daemon，
+                              按需激活；桥接复用 ipc/client，不触碰 core）
 ```
 
 **守护进程 + 多前端**的原因：索引只建一次、实时监控只跑一份，多端共享同一索引；
@@ -37,7 +40,7 @@ TUI 只实现核心功能、GUI 后续接入，均不改动 `core`。
 | 检索语义 | 大小写不敏感子串；含 `* ?` 转通配符；`re:` 前缀转 ECMAScript 正则 | 仅匹配 basename（不匹配完整路径）；支持按 name/path/size/mtime 排序；正则为回溯引擎，病态模式可能长时间占用搜索（见 Spec 008「已知限制」） |
 | 增量更新 | inotify | 为内存索引中的每个目录加 watch；新目录在 `IN_CREATE` 时递归挂接；`IN_MODIFY/ATTRIB` 触发 re-stat |
 | 排除 | 前缀匹配 + 隐藏文件开关 | 默认排除 /proc /sys /dev /run 与 `~/.cache`、回收站 |
-| IPC | 明文行协议 | 简单、可用 socat 调试；留 D-Bus 升级口 |
+| IPC | 明文行协议 | 简单、可用 socat 调试；D-Bus 作为**并存的桌面门面**（Spec 009：`lsearch-dbus` 注册会话总线 `com.lsearch.Daemon`，按需激活，底层仍复用同一 socket 客户端） |
 | 并发 | `std::shared_mutex` | 搜索读共享锁、增量写独占锁；SQLite WAL 处理 DB 读写并发 |
 | 不变量 | 仅用户家目录 | 默认 `paths = $HOME`，配置极简，避免隐私与首扫过慢 |
 
@@ -55,6 +58,8 @@ TUI/CLI → Client → socket → lsearchd serveConnection
 - **inotify 上限**：海量目录时需调高 `max_user_watches`；后续可加周期对账。
 - **启动恢复**：V1 直接 load SQLite；后续可按目录 mtime 做局部重扫，避免全量重建。
 - **Qt GUI**：`core` 与前端已解耦，GUI 仅需新前端，复用 IPC client。
+- **D-Bus 后续**（Spec 009 已交付会话总线门面 `lsearch-dbus`）：桌面全局搜索提供者
+  （UKUI/GNOME shell）、文件管理器集成、`IndexChanged` 信号与 Properties → 后续规格。
 - **多架构打包**：x86_64 + aarch64（飞腾/鲲鹏）交叉编译矩阵。
 
 ## 6. 开源参考

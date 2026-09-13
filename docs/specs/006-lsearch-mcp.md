@@ -110,7 +110,7 @@ Then MCP 进程退出 0，且 `lsearchd` 仍可被 CLI 查询（daemon 未被连
 - 构建（C++17，`-Wall -Wextra` 零告警）：
   `cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j"$(nproc)"`
   产物 `build/lsearch-mcp`；静态库 `lsearch_mcp_lib`（`mcp/json.cpp` + `mcp/protocol.cpp`）。
-- 单测 `./build/lsearch_tests` → **267 checks / 0 failures**（新增 16 例：
+- 单测 `./build/lsearch_tests` → **334 checks / 0 failures**（MCP 新增 16 例：
   `mcp_json_escape_roundtrip`、`mcp_json_invalid_utf8_sanitized`、`mcp_json_parse_errors`、
   `mcp_json_surrogate_and_nul`、`mcp_json_depth_limit`、`mcp_json_nonfinite_rejected`、
   `mcp_json_asint_clamp`、`mcp_limit_clamp`、`mcp_overfetch_arithmetic`、`mcp_paginate_slicing`、
