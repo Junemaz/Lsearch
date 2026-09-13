@@ -96,8 +96,8 @@ Then 行为与引入正则前一致
 ## Evidence
 - 构建（C++17，`-Wall -Wextra` 零告警）：
   `cmake --build build -j"$(nproc)"`（强制重编改动文件后 grep warning/error 为空）。
-- 单测 `./build/lsearch_tests` → **263 checks / 0 failures**（首版 218 → 237 → Oracle 修复后 256
-  → 测试去 flaky 后 263）。
+- 单测 `./build/lsearch_tests` → **267 checks / 0 failures**（首版 218 → 237 → Oracle 修复后 256
+  → 测试去 flaky 后 263 → MCP 互操作修复后 267）。
   新增/相关用例：`search_regex_anchored`（`re:^AnnualReport\d{4}\.txt$` 仅命中
   `AnnualReport2026.txt`）、`search_regex_case_insensitive`（`re:ANNUALREPORT` 命中 2 个）、
   `search_validate_query`（`re:[` 返回 false + 非空 message；空/空白 `re:` 与非 `re:` 查询合法）、
@@ -116,7 +116,7 @@ Then 行为与引入正则前一致
   `re:^AnnualReport\.txt$` 仅输出隔离 HOME 的 `AnnualReport.txt`；`re:[` → 退出码 2 +
   stderr 含 `bad regex`，随后普通查询仍命中（守护进程存活）；空正则 `re:`/`re:   ` 视为
   空查询（退出码 1，非错误 2）。
-- 端到端 `./scripts/self-test-mcp.sh -s` → **通过 28 项 / 失败 0 项**（首版 25 → 27 → 28）：
+- 端到端 `./scripts/self-test-mcp.sh -s` → **通过 29 项 / 失败 0 项**（首版 25 → 27 → 28 → 29）：
   `S11a` `search_files{query:'re:^AnnualReport\.txt$'}` 返回 `AnnualReport.txt`；
   `S11b` `search_files{query:'re:['}` → `-32602`；`S11c` `search_files{query:'re:'}` → `-32602`。
 - 回归：既有子串/glob/排序/分页/单例锁/关闭清理用例全部保持通过（见上两条冒烟计数）。

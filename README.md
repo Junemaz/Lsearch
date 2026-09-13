@@ -52,7 +52,7 @@ lsearch-tui                      # 输入即搜；↑↓ 选择，Enter 打开�
 ```
 MCP 前端自测（stdio JSON-RPC，S1–S11；需 python3）：
 ```bash
-./scripts/self-test-mcp.sh      # 自动构建后跑全部 28 项
+./scripts/self-test-mcp.sh      # 自动构建后跑全部 29 项
 ./scripts/self-test-mcp.sh -s   # 跳过构建
 ```
 TUI 自动化自测（tmux 伪终端注入按键并断言画面；需装 tmux）：

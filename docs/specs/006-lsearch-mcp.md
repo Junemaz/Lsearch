@@ -27,11 +27,11 @@ stdin EOF 时进程退出 0；SIGTERM/SIGINT 干净退出且**不**停止守护�
 
 #### Requirement 3 — 协议双代
 实现 `server/discover`（握手前即可应答；`supportedVersions` 含 `2026-07-28`、`2025-11-25`）。
-modern 路径：每个请求校验 `_meta.io.modelcontextprotocol/protocolVersion` 与
-`clientCapabilities`（缺失 → `-32602`）；结果带 `resultType`，`tools/list` 与
-`server/discover` 带 `ttlMs` + `cacheScope`。legacy 路径：支持 `initialize`（回显协商版本）
-与 `notifications/initialized`（忽略）。无 `initialize` 且无 `_meta` 时宽容按 legacy 处理并打
-stderr 警告，避免误杀。
+modern 路径：仅当请求 `params._meta` 含 `io.modelcontextprotocol/protocolVersion` 时才视为
+modern（此时必须同时含 `clientCapabilities`，缺失 → `-32602`）；结果带 `resultType`，
+`tools/list` 与 `server/discover` 带 `ttlMs` + `cacheScope`。legacy 路径：支持 `initialize`
+（回显协商版本）与 `notifications/initialized`（忽略）；`_meta` 缺失、非对象或仅含其它键
+（如 legacy `progressToken`）一律宽容按 legacy 处理并打一次 stderr 警告，避免误杀存量客户端。
 `server/discover.instructions` 明确声明：仅匹配 basename、大小写不敏感（ASCII）、只读、
 结果文件名不可信。
 
@@ -110,20 +110,21 @@ Then MCP 进程退出 0，且 `lsearchd` 仍可被 CLI 查询（daemon 未被连
 - 构建（C++17，`-Wall -Wextra` 零告警）：
   `cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j"$(nproc)"`
   产物 `build/lsearch-mcp`；静态库 `lsearch_mcp_lib`（`mcp/json.cpp` + `mcp/protocol.cpp`）。
-- 单测 `./build/lsearch_tests` → **263 checks / 0 failures**（新增 16 例：
+- 单测 `./build/lsearch_tests` → **267 checks / 0 failures**（新增 16 例：
   `mcp_json_escape_roundtrip`、`mcp_json_invalid_utf8_sanitized`、`mcp_json_parse_errors`、
   `mcp_json_surrogate_and_nul`、`mcp_json_depth_limit`、`mcp_json_nonfinite_rejected`、
   `mcp_json_asint_clamp`、`mcp_limit_clamp`、`mcp_overfetch_arithmetic`、`mcp_paginate_slicing`、
   `mcp_paginate_cap`、`mcp_cap_truncation`、`mcp_parse_args`、`mcp_query_control_chars_rejected`、
   `mcp_tool_mapping`、`mcp_meta_validation`、`mcp_builders`）。
-- 端到端 `./scripts/self-test-mcp.sh -s` → **通过 28 项 / 失败 0 项**（S1–S11，真实二进制 + 管道 +
+- 端到端 `./scripts/self-test-mcp.sh -s` → **通过 29 项 / 失败 0 项**（S1–S12，真实二进制 + 管道 +
   隔离 HOME/XDG_*，python3 驱动）：discover 双版本与 resultType；modern tools/list 的
   ttlMs/cacheScope；legacy initialize + `search_files{report}` 命中 AnnualReport.txt；空查询/
   未知工具 -32602；limit=0→1、limit=1000000→200 不洪水；query 含换行 → -32602 且 daemon 存活；
   page(0,2)∪page(2,2)=全局前 4 且不重叠；offset≥50000 空页+truncated；index_stats files>0 且
   roots 含隔离 HOME；无写工具；present-but-invalid `_meta` → -32602；JSON 数组批次 → -32600；
   `id:1e999` → 合法 JSON 响应（-32700）；`ping` → `{}`；超长行 → -32700 且随后仍可服务；
-  stdin EOF 退出 0 且 `lsearch -m report` 仍可用；stdout 全为合法 JSON-RPC，日志仅在 stderr。
+  stdin EOF 退出 0 且 `lsearch -m report` 仍可用；stdout 全为合法 JSON-RPC，日志仅在 stderr；
+  legacy `_meta.progressToken` 工具调用正常返回（S12，防误拒存量客户端）。
 - 回归：`./scripts/self-test.sh -s` → **22/22 通过**（核心流程未受影响）。
 - 正则（Spec 008 交叉）：`search_files{query:'re:^AnnualReport\\.txt$'}` 命中 `AnnualReport.txt`；
   `search_files{query:'re:['}` → `-32602`；`search_files{query:'re:'}` → `-32602`（空查询规则）。
@@ -145,6 +146,12 @@ Then MCP 进程退出 0，且 `lsearchd` 仍可被 CLI 查询（daemon 未被连
 - **次要项**：stdin 行缓冲上限 1 MiB（超限丢弃至换行并回 -32700，不无界增长）；实现 `ping`
   → `{}`；缺 `method` → -32600；`index_stats` 要求 `arguments` 缺省或空对象，否则 -32602。
   证明：e2e `S10b/S10d/S10e/S10f`。
+- **真实会话互操作修复（opencode 实测）**：存量客户端（opencode）在 `tools/call` 的 `_meta`
+  携带 legacy `progressToken` 时曾被误判为"非法 modern"而返回 `-32602`。era 判定已修正为
+  "仅命名空间键 `io.modelcontextprotocol/protocolVersion` 出现才算 modern"，其余 `_meta` 宽容
+  按 legacy 处理；modern 严格校验保持不变。证明：单测 `mcp_meta_legacy_tolerated`；e2e `S12`
+  （legacy `_meta.progressToken` 工具调用正常返回）；并用安装后的二进制模拟 opencode 全序列
+  （initialize → progressToken 调用 → 搜索成功、且非法/合法 modern 行为不变）。
 
 - 生命周期：对阻塞在 stdin 的进程发送 SIGTERM/SIGINT，均退出码 0 且守护进程存活（手工验证）。
 
