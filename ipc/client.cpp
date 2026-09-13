@@ -8,6 +8,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include <cstdio>
 #include <cstdlib>
 #include <cerrno>
 #include <chrono>
@@ -25,6 +26,8 @@ void Client::close() {
     fd_ = -1;
   }
   recvBuf_.clear();
+  v2_ = -1;
+  lastSearchLegacy_ = false;
 }
 
 bool Client::connect(const std::string& sock, std::string& err) {
@@ -164,6 +167,134 @@ bool Client::search(const std::string& query, SortKey sort, size_t limit,
     }
   }
   return true;
+}
+
+bool Client::searchEx(const std::string& query, SortKey sort, size_t limit,
+                      bool dirs_only, bool files_only, const std::string& under,
+                      SearchOutcome& out, std::string& err) {
+  out.results.clear();
+  out.total = 0;
+  out.total_capped = false;
+  lastSearchLegacy_ = false;
+
+  const std::string under64 = under.empty() ? "-" : base64Encode(under);
+  const std::string req = "search2 " + std::to_string(limit) + " " + (dirs_only ? "1" : "0") +
+                          " " + (files_only ? "1" : "0") + " " + sortKeyName(sort) + " " +
+                          under64 + " " + query;
+  if (!writeLine(req, err)) return false;
+
+  std::string line;
+  bool eof = false;
+  if (!readLine(line, eof, err)) return false;
+  if (line == "ERR unknown command") {
+    v2_ = 0;
+    lastSearchLegacy_ = true;
+    std::vector<SearchResult> res;
+    size_t total = 0;
+    if (!search(query, sort, limit, dirs_only, files_only, res, &total, err)) return false;
+    out.results = std::move(res);
+    out.total = total;
+    out.total_capped = false;
+    return true;
+  }
+  if (!startsWith(line, "OK")) {
+    err = line;
+    return false;
+  }
+  unsigned long long returned = 0, total = 0;
+  int capped = 0;
+  if (sscanf(line.c_str(), "OK %llu %llu %d", &returned, &total, &capped) != 3) {
+    err = "bad search2 reply: " + line;
+    return false;
+  }
+  (void)returned;
+  out.total = static_cast<uint64_t>(total);
+  out.total_capped = (capped != 0);
+
+  while (true) {
+    if (!readLine(line, eof, err)) return false;
+    if (line == "END") break;
+    bool is_dir, pm;
+    long long size, mtime;
+    std::string path;
+    if (proto::parseResultLine(line, is_dir, size, mtime, pm, path)) {
+      SearchResult r;
+      r.entry.path = path;
+      r.entry.name = baseName(path);
+      r.entry.is_dir = is_dir;
+      r.entry.size = size;
+      r.entry.mtime = mtime;
+      r.path_matched = pm;
+      out.results.push_back(std::move(r));
+    }
+  }
+  return true;
+}
+
+bool Client::countEx(const std::string& query, bool dirs_only, bool files_only,
+                     const std::string& under, uint64_t& total, bool& capped,
+                     std::string& err) {
+  total = 0;
+  capped = false;
+  const std::string under64 = under.empty() ? "-" : base64Encode(under);
+  const std::string req = "count2 " + std::string(dirs_only ? "1" : "0") + " " +
+                          (files_only ? "1" : "0") + " " + under64 + " " + query;
+  if (!writeLine(req, err)) return false;
+
+  std::string line;
+  bool eof = false;
+  if (!readLine(line, eof, err)) return false;
+  if (line == "ERR unknown command") {
+    v2_ = 0;
+    std::vector<SearchResult> res;
+    size_t n = 0;
+    if (!search(query, SortKey::Name, 0, dirs_only, files_only, res, &n, err)) return false;
+    total = n;
+    capped = n >= Index::kDefaultCandidateCap;
+    return true;
+  }
+  if (!startsWith(line, "OK")) {
+    err = line;
+    return false;
+  }
+  unsigned long long t = 0;
+  int c = 0;
+  if (sscanf(line.c_str(), "OK %llu %d", &t, &c) != 2) {
+    err = "bad count2 reply: " + line;
+    return false;
+  }
+  total = t;
+  capped = (c != 0);
+  return true;
+}
+
+bool Client::capabilities(std::vector<std::string>& commands, std::string& err) {
+  commands.clear();
+  std::vector<std::pair<std::string, std::string>> kv;
+  if (!readKvReply("capabilities", kv, err)) return false;
+  for (const auto& e : kv) {
+    if (e.first == "commands") {
+      commands = split(e.second, ',');
+      break;
+    }
+  }
+  return true;
+}
+
+bool Client::supportsV2() {
+  if (v2_ >= 0) return v2_ == 1;
+  std::vector<std::string> cmds;
+  std::string err;
+  v2_ = 0;
+  if (capabilities(cmds, err)) {
+    for (const auto& c : cmds) {
+      if (c == "search2") {
+        v2_ = 1;
+        break;
+      }
+    }
+  }
+  return v2_ == 1;
 }
 
 bool Client::stats(std::vector<std::pair<std::string, std::string>>& kv, std::string& err) {
