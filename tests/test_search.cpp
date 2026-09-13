@@ -217,27 +217,211 @@ TEST(search_regex_non_ascii_and_icase) {
 }
 
 TEST(search_regex_paging_prefix) {
-  // 已知限制：匹配数 > limit 时引擎返回不确定子集，因此只在 limit >= 匹配数
-  //（确定返回全集）下断言排序一致，另单独验证 limit<匹配数的子集性质。
+  // 新语义（searchEx）：匹配数 ≤ cap 时收集全部匹配 → total 精确、页间稳定；
+  // limit<匹配数 时返回排序后的确定前缀，而非不确定子集。
   std::vector<FileEntry> v;
   for (int i = 0; i < 6; ++i)
     v.push_back({"/a/rx_" + std::to_string(i), "rx_" + std::to_string(i), 1, i, false,
                  static_cast<uint64_t>(i)});
   Index idx;
   idx.build(std::move(v));
-  std::vector<SearchResult> full, page, capped;
-  bool tr;
-  idx.search("re:.", SortKey::Name, 0, false, false, full, tr);
-  CHECK_EQ(full.size(), (size_t)6);
-  idx.search("re:.", SortKey::Name, 6, false, false, page, tr);
-  CHECK_EQ(page.size(), (size_t)6);
-  for (size_t i = 0; i < page.size(); ++i) CHECK_EQ(page[i].entry.name, full[i].entry.name);
-  idx.search("re:.", SortKey::Name, 3, false, false, capped, tr);
-  CHECK_EQ(capped.size(), (size_t)3);
-  for (const auto& r : capped) {
-    bool in_full = false;
-    for (const auto& f : full)
-      if (f.entry.name == r.entry.name) in_full = true;
-    CHECK(in_full);
+
+  SearchOutcome full;
+  idx.searchEx("re:.", SortKey::Name, 0, false, false, "", full);
+  CHECK_EQ(full.results.size(), (size_t)6);
+  CHECK_EQ(full.total, (uint64_t)6);
+  CHECK(!full.total_capped);
+
+  SearchOutcome page;
+  idx.searchEx("re:.", SortKey::Name, 6, false, false, "", page);
+  CHECK_EQ(page.results.size(), (size_t)6);
+  for (size_t i = 0; i < page.results.size(); ++i)
+    CHECK_EQ(page.results[i].entry.name, full.results[i].entry.name);
+
+  SearchOutcome limited;
+  idx.searchEx("re:.", SortKey::Name, 3, false, false, "", limited);
+  CHECK_EQ(limited.results.size(), (size_t)3);
+  CHECK_EQ(limited.total, (uint64_t)6);  // total 仍精确
+  CHECK(!limited.total_capped);
+  for (size_t i = 0; i < limited.results.size(); ++i)
+    CHECK_EQ(limited.results[i].entry.name, full.results[i].entry.name);  // 确定前缀
+}
+
+static std::vector<FileEntry> underSample() {
+  std::vector<FileEntry> v;
+  v.push_back({"/data", "data", 0, 1, true, 1});
+  v.push_back({"/data/report.txt", "report.txt", 1, 2, false, 2});
+  v.push_back({"/data/sub/report.txt", "report.txt", 1, 3, false, 3});
+  v.push_back({"/data2/report.txt", "report.txt", 1, 4, false, 4});
+  v.push_back({"/datax/report.txt", "report.txt", 1, 5, false, 5});
+  v.push_back({"/Data/report.txt", "report.txt", 1, 6, false, 6});
+  v.push_back({"/other/report.txt", "report.txt", 1, 7, false, 7});
+  return v;
+}
+
+TEST(search_ex_under_exact_and_subtree) {
+  Index idx;
+  idx.build(underSample());
+  SearchOutcome out;
+  idx.searchEx("report", SortKey::Path, 0, false, false, "/data", out);
+  CHECK_EQ(out.total, (uint64_t)2);  // /data/report.txt + /data/sub/report.txt
+  CHECK(!out.total_capped);
+  CHECK_EQ(out.results.size(), (size_t)2);
+  for (const auto& r : out.results) CHECK(startsWith(r.entry.path, "/data/"));
+
+  // path == under：目录条目本身命中
+  idx.searchEx("data", SortKey::Path, 0, false, false, "/data", out);
+  CHECK_EQ(out.total, (uint64_t)1);
+  CHECK_EQ(out.results[0].entry.path, std::string("/data"));
+}
+
+TEST(search_ex_under_sibling_guard) {
+  Index idx;
+  idx.build(underSample());
+  SearchOutcome out;
+  idx.searchEx("report", SortKey::Path, 0, false, false, "/data", out);
+  for (const auto& r : out.results) {
+    CHECK(r.entry.path.rfind("/data2/", 0) != 0);
+    CHECK(r.entry.path.rfind("/datax/", 0) != 0);
   }
+}
+
+TEST(search_ex_under_no_match) {
+  Index idx;
+  idx.build(underSample());
+  SearchOutcome out;
+  idx.searchEx("report", SortKey::Path, 0, false, false, "/nope", out);
+  CHECK_EQ(out.total, (uint64_t)0);
+  CHECK(out.results.empty());
+  CHECK(!out.total_capped);
+}
+
+TEST(search_ex_under_all_variants) {
+  Index idx;
+  idx.build(underSample());
+  SearchOutcome a, b, c;
+  idx.searchEx("report", SortKey::Path, 0, false, false, "", a);
+  idx.searchEx("report", SortKey::Path, 0, false, false, "/", b);
+  idx.searchEx("report", SortKey::Path, 0, false, false, "-", c);
+  CHECK_EQ(a.total, (uint64_t)6);
+  CHECK_EQ(b.total, (uint64_t)6);
+  CHECK_EQ(c.total, (uint64_t)6);
+}
+
+TEST(search_ex_under_trailing_slash) {
+  Index idx;
+  idx.build(underSample());
+  SearchOutcome a, b;
+  idx.searchEx("report", SortKey::Path, 0, false, false, "/data", a);
+  idx.searchEx("report", SortKey::Path, 0, false, false, "/data/", b);
+  CHECK_EQ(a.total, b.total);
+  CHECK_EQ(a.results.size(), b.results.size());
+}
+
+TEST(search_ex_under_case_sensitive) {
+  Index idx;
+  idx.build(underSample());
+  SearchOutcome lower, upper;
+  idx.searchEx("report", SortKey::Path, 0, false, false, "/data", lower);
+  for (const auto& r : lower.results) CHECK(r.entry.path.rfind("/Data/", 0) != 0);
+  idx.searchEx("report", SortKey::Path, 0, false, false, "/Data", upper);
+  CHECK_EQ(upper.total, (uint64_t)1);
+  CHECK_EQ(upper.results[0].entry.path, std::string("/Data/report.txt"));
+}
+
+TEST(search_ex_under_orthogonal) {
+  Index idx;
+  idx.build(underSample());
+  SearchOutcome re, glob, dirs, files;
+  idx.searchEx("re:^report", SortKey::Path, 0, false, false, "/data", re);
+  CHECK_EQ(re.total, (uint64_t)2);
+  idx.searchEx("*.txt", SortKey::Path, 0, false, false, "/data", glob);
+  CHECK_EQ(glob.total, (uint64_t)2);
+  idx.searchEx("data", SortKey::Path, 0, true, false, "/data", dirs);
+  CHECK_EQ(dirs.total, (uint64_t)1);
+  CHECK(dirs.results[0].entry.is_dir);
+  idx.searchEx("report", SortKey::Path, 0, false, true, "/data", files);
+  CHECK_EQ(files.total, (uint64_t)2);
+}
+
+TEST(search_ex_offset_returned_total) {
+  Index idx;
+  idx.build(underSample());
+  SearchOutcome out;
+  idx.searchEx("report", SortKey::Path, 3, false, false, "", out);
+  CHECK_EQ(out.results.size(), (size_t)3);
+  CHECK_EQ(out.total, (uint64_t)6);
+  CHECK(!out.total_capped);
+}
+
+TEST(search_ex_cap_flags_membership) {
+  std::vector<FileEntry> v;
+  for (int i = 0; i < 8; ++i)
+    v.push_back({"/c/e" + std::to_string(i), "e" + std::to_string(i), 1, i, false,
+                 static_cast<uint64_t>(i)});
+  Index idx;
+  idx.build(std::move(v));
+  const size_t old = idx.setCandidateCapForTest(3);
+  SearchOutcome out;
+  idx.searchEx("e", SortKey::Name, 0, false, false, "", out);
+  CHECK(out.total_capped);
+  CHECK_EQ(out.total, (uint64_t)3);
+  CHECK(out.results.size() <= 3);
+  for (const auto& r : out.results) CHECK(r.entry.path.rfind("/c/", 0) == 0);
+  idx.setCandidateCapForTest(old);
+}
+
+TEST(count_ex_exact) {
+  Index idx;
+  idx.build(underSample());
+  bool capped = true;
+  CHECK_EQ(idx.countEx("report", false, false, "", capped), (size_t)6);
+  CHECK(!capped);
+  CHECK_EQ(idx.countEx("report", false, false, "/data", capped), (size_t)2);
+  CHECK(!capped);
+  CHECK_EQ(idx.countEx("report", true, false, "/data", capped), (size_t)0);
+  CHECK(!capped);
+}
+
+TEST(count_ex_cap) {
+  std::vector<FileEntry> v;
+  for (int i = 0; i < 8; ++i)
+    v.push_back({"/c/e" + std::to_string(i), "e" + std::to_string(i), 1, i, false,
+                 static_cast<uint64_t>(i)});
+  Index idx;
+  idx.build(std::move(v));
+  const size_t old = idx.setCandidateCapForTest(3);
+  bool capped = false;
+  const size_t n = idx.countEx("e", false, false, "", capped);
+  CHECK(capped);
+  CHECK_EQ(n, (size_t)3);
+  idx.setCandidateCapForTest(old);
+}
+
+TEST(base64_roundtrip_and_strict) {
+  CHECK_EQ(base64Encode(""), std::string(""));
+  CHECK_EQ(base64Encode("f"), std::string("Zg=="));
+  CHECK_EQ(base64Encode("fo"), std::string("Zm8="));
+  CHECK_EQ(base64Encode("foo"), std::string("Zm9v"));
+  CHECK_EQ(base64Encode("hello"), std::string("aGVsbG8="));
+
+  std::string d;
+  CHECK(base64Decode("aGVsbG8=", d));
+  CHECK_EQ(d, std::string("hello"));
+  CHECK(base64Decode("", d));
+  CHECK(d.empty());
+
+  CHECK(!base64Decode("aGVsbG8", d));         // 长度非 4 倍数
+  CHECK(!base64Decode("aGVs bG8", d));        // 空白
+  CHECK(!base64Decode("aGVsbG8*", d));        // 非法字符
+  CHECK(!base64Decode("====", d));            // 非法填充
+  CHECK(!base64Decode("AB==", d));            // 非规范填充位
+  CHECK(!base64Decode("aGVsbG8=" + std::string(kBase64MaxEncoded, 'A'), d));  // 超长
+
+  const std::string nul = base64Encode(std::string("a\0b", 3));
+  CHECK(!base64Decode(nul, d));  // 解码含 NUL
+
+  const std::string cjk = "/数据/报告";
+  CHECK(base64Decode(base64Encode(cjk), d));
+  CHECK_EQ(d, cjk);
 }

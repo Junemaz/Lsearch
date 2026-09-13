@@ -1,5 +1,6 @@
 #include "test_util.h"
 
+#include "core/search.h"
 #include "dbus/logic.h"
 
 #include <string>
@@ -70,7 +71,7 @@ TEST(dbus_make_search_args_limit_offset_clamp) {
   CHECK_EQ(sa.limit, (size_t)200);
   CHECK(makeSearchArgs("q", 200, 50000, "name", "any", sa, err));
   CHECK_EQ(sa.offset, (size_t)50000);
-  CHECK_EQ(mcp::overFetch(sa.offset, sa.limit), mcp::kMaxFetch);
+  CHECK_EQ(mcp::overFetch(sa.offset, sa.limit), Index::kDefaultCandidateCap);
 }
 
 TEST(dbus_make_search_args_empty_and_regex) {
