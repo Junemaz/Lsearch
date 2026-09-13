@@ -4,16 +4,39 @@
 #include "ipc/client.h"
 
 #include <fcntl.h>
+#include <sys/file.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
 #include <algorithm>
+#include <cerrno>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <string>
 
 using namespace lsearch;
+
+// 单例锁：并发冷启动时防止出现两个守护进程（互相偷 socket、同写一个 DB）。
+// busy=true 表示锁被其他实例占用（正在启动/运行）；其他失败写 err。
+// 返回的持锁 fd 需保持打开至进程退出（flock 随 fd 关闭自动释放，无陈旧锁问题）。
+static int acquireInstanceLock(const std::string& sockPath, bool& busy, std::string& err) {
+  busy = false;
+  size_t slash = sockPath.find_last_of('/');
+  if (slash != std::string::npos) mkdir(sockPath.substr(0, slash).c_str(), 0700);
+  const std::string lockPath = sockPath + ".lock";
+  int fd = ::open(lockPath.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0600);
+  if (fd < 0) {
+    err = "open " + lockPath + ": " + std::string(strerror(errno));
+    return -1;
+  }
+  if (::flock(fd, LOCK_EX | LOCK_NB) != 0) {
+    busy = true;
+    ::close(fd);
+    return -1;
+  }
+  return fd;
+}
 
 static void printUsage(FILE* f) {
   fprintf(f,
@@ -108,6 +131,23 @@ int main(int argc, char** argv) {
       fprintf(stderr, "lsearchd 已在运行（命令已转发）。\n");
       return 0;
     }
+  }
+
+  // 单例锁：探测与真正 bind 之间仍有竞态窗口；加锁确保并发冷启动只产生一个守护进程。
+  // 锁 fd 由 fork 后的子进程继承（父进程退出不释放），daemon 退出时自动释放。
+  {
+    bool busy = false;
+    std::string lerr;
+    int lockFd = acquireInstanceLock(cfg.sock_path, busy, lerr);
+    if (lockFd < 0) {
+      if (busy) {
+        fprintf(stderr, "lsearchd 另一实例正在启动或运行（单例锁被占用），本进程退出。\n");
+        return 0;
+      }
+      fprintf(stderr, "无法获取单例锁: %s\n", lerr.c_str());
+      return 1;
+    }
+    (void)lockFd;  // 持锁 fd 需保持打开直到进程退出，不可关闭
   }
 
   // 无运行实例时：--rebuild 需在启动/fork 前强制全量重建（Daemon::init 读取该环境变量）

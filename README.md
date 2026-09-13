@@ -46,7 +46,7 @@ lsearch-tui                      # 输入即搜；↑↓ 选择，Enter 打开�
 ## 自测
 一键自测核心流程（含建索引 / 搜索 / inotify 增量 / 停机补齐 / 关闭）：
 ```bash
-./scripts/self-test.sh          # 自动构建后跑全部 15 项
+./scripts/self-test.sh          # 自动构建后跑全部 19 项
 ./scripts/self-test.sh -s       # 跳过构建，直接用现有 build/
 ```
 TUI 自动化自测（tmux 伪终端注入按键并断言画面；需装 tmux）：

@@ -68,6 +68,36 @@ echo "==> 6/ 统计与关闭"
 "$ROOT/build/lsearchd" --shutdown >/dev/null 2>&1; sleep 1; wait $DPID 2>/dev/null
 [ -S "$T/run/lsearch.sock" ] && bad "shutdown 后 socket 未清理" || ok "shutdown 后 socket 已清理"
 
+echo "==> 7/ 单例锁（并发冷启动竞态）"
+LOCKF="$T/run/lsearch.sock.lock"
+if command -v flock >/dev/null 2>&1; then
+  exec 9>"$LOCKF"
+  flock -n 9
+  OUT=$(timeout 5 "$ROOT/build/lsearchd" --foreground 2>&1); RC=$?
+  exec 9>&-
+  if [ "$RC" -ne 124 ] && printf '%s' "$OUT" | grep -q "单例"; then
+    ok "锁被占用时新实例快速退出（未偷 socket）"
+  else
+    bad "单例锁未生效（rc=$RC）"
+  fi
+else
+  echo "  SKIP  flock 命令不可用"
+fi
+
+"$ROOT/build/lsearchd" --foreground > "$T/log-race-1.txt" 2>&1 &
+P1=$!
+"$ROOT/build/lsearchd" --foreground > "$T/log-race-2.txt" 2>&1 &
+P2=$!
+sleep 2
+alive() { local s; s=$(ps -p "$1" -o stat= 2>/dev/null | tr -d ' '); [ -n "$s" ] && [ "${s#Z}" = "$s" ]; }
+ALIVE=0; alive "$P1" && ALIVE=$((ALIVE+1)); alive "$P2" && ALIVE=$((ALIVE+1))
+[ "$ALIVE" -eq 1 ] && ok "并发启动恰好一个实例存活" || bad "并发启动存活 $ALIVE 个（应为 1）"
+for i in $(seq 1 40); do [ -S "$T/run/lsearch.sock" ] && break; sleep 0.2; done
+"$L" -m --stats 2>/dev/null | grep -q "^files=" && ok "存活实例正常服务（stats）" || bad "存活实例不可用"
+"$ROOT/build/lsearchd" --shutdown >/dev/null 2>&1; sleep 1
+wait "$P1" 2>/dev/null; wait "$P2" 2>/dev/null
+[ -S "$T/run/lsearch.sock" ] && bad "单例场景 shutdown 后 socket 未清理" || ok "单例场景 shutdown 干净"
+
 rm -rf "$T"
 echo
 echo "=============================================="
