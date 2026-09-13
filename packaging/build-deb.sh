@@ -21,10 +21,14 @@ if [ ! -f "$STAGE/usr/bin/lsearch-gui" ]; then
   echo "错误: 未产出 lsearch-gui（需要 Qt5 Widgets 开发包：apt install qtbase5-dev）" >&2
   exit 1
 fi
-mkdir -p "$PKGDIR/DEBIAN" "$PKGDIR/usr/bin" "$PKGDIR/usr/share/lsearch"
+mkdir -p "$PKGDIR/DEBIAN" "$PKGDIR/usr/bin" "$PKGDIR/usr/share/lsearch" \
+         "$PKGDIR/usr/share/dbus-1/services"
 cp -f "$STAGE/usr/bin/lsearch" "$STAGE/usr/bin/lsearchd" "$STAGE/usr/bin/lsearch-tui" \
-      "$STAGE/usr/bin/lsearch-gui" "$STAGE/usr/bin/lsearch-mcp" "$PKGDIR/usr/bin/"
+      "$STAGE/usr/bin/lsearch-gui" "$STAGE/usr/bin/lsearch-mcp" "$STAGE/usr/bin/lsearch-dbus" \
+      "$PKGDIR/usr/bin/"
 cp -f "$STAGE/usr/share/lsearch/lsearch.conf.example" "$PKGDIR/usr/share/lsearch/"
+cp -f "$STAGE/usr/share/dbus-1/services/com.lsearch.Daemon.service" \
+      "$PKGDIR/usr/share/dbus-1/services/"
 
 cat > "$PKGDIR/DEBIAN/control" <<EOF
 Package: lsearch
@@ -32,13 +36,14 @@ Version: 0.1.0-1
 Section: utils
 Priority: optional
 Architecture: ${ARCH}
-Depends: libc6, libsqlite3-0, libncurses6, libqt5widgets5
+Depends: libc6, libsqlite3-0, libncurses6, libqt5widgets5, libdbus-1-3
 Maintainer: Lsearch contributors <lsearch@example.com>
 Description: Everything-style filename search for Kylin Linux
  Fast filename search for 麒麟/信创桌面: a daemon (lsearchd) keeps an
  in-memory index with SQLite persistence and realtime inotify updates.
- Frontends: lsearch (CLI), lsearch-tui (TUI), lsearch-gui (Qt5) and
- lsearch-mcp (MCP stdio server for LLM agents).
+ Frontends: lsearch (CLI), lsearch-tui (TUI), lsearch-gui (Qt5),
+ lsearch-mcp (MCP stdio server for LLM agents) and lsearch-dbus
+ (session D-Bus facade com.lsearch.Daemon with on-demand activation).
 EOF
 
 echo "==> 打 deb 包..."

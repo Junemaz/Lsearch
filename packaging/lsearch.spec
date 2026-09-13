@@ -9,12 +9,14 @@ BuildArch:      %{ARCH}
 Requires:       sqlite-libs
 Requires:       ncurses-libs
 Requires:       qt5-qtbase
+Requires:       dbus-libs
 
 %description
 Fast filename search for 麒麟/信创桌面: a daemon (lsearchd) keeps an in-memory
 index with SQLite persistence and realtime inotify updates.
-Frontends: lsearch (CLI), lsearch-tui (TUI), lsearch-gui (Qt5) and
-lsearch-mcp (MCP stdio server for LLM agents).
+Frontends: lsearch (CLI), lsearch-tui (TUI), lsearch-gui (Qt5),
+lsearch-mcp (MCP stdio server for LLM agents) and lsearch-dbus
+(session D-Bus facade com.lsearch.Daemon with on-demand activation).
 
 %prep
 # 二进制打包：无源码；%{buildroot} 由 build-rpm.sh 以 DESTDIR 预填充
@@ -32,6 +34,8 @@ cp -a %{stage_dir}/usr %{buildroot}/
 /usr/bin/lsearch-tui
 /usr/bin/lsearch-gui
 /usr/bin/lsearch-mcp
+/usr/bin/lsearch-dbus
+/usr/share/dbus-1/services/com.lsearch.Daemon.service
 /usr/share/lsearch/lsearch.conf.example
 
 %post

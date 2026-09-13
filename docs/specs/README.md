@@ -19,10 +19,10 @@
 | [003-cli-tui](003-cli-tui.md) | CLI 与 TUI 前端 | **Done** | 端到端冒烟 |
 | [004-packaging](004-packaging.md) | deb/rpm 打包、多架构 | **Done**(deb/rpm 构建实测) / 多架构待验证 | `packaging/*.deb`、`*.rpm` |
 | [005-gui-v2](005-gui-v2.md) | V2：Qt5 GUI | **Done**（麒麟实机安装待验证） | offscreen 冒烟、WSLg 验证、deb/rpm 含 GUI |
-| [006-lsearch-mcp](006-lsearch-mcp.md) | MCP 前端（stdio，LLM 编码代理） | **Done** | `lsearch_tests` 267、`self-test-mcp.sh` 29/29 |
+| [006-lsearch-mcp](006-lsearch-mcp.md) | MCP 前端（stdio，LLM 编码代理） | **Done** | `lsearch_tests` 334、`self-test-mcp.sh` 29/29 |
 | [007-daemon-singleton](007-daemon-singleton.md) | 守护进程单例锁（并发启动竞态） | **Done** | `scripts/self-test.sh` 22/22（含单例 4 项） |
-| [008-regex](008-regex.md) | V3：正则匹配（`re:` 前缀，ECMAScript） | **Done** | `lsearch_tests` 267、`self-test.sh` 22/22、`self-test-mcp.sh` 29/29 |
-| [009-dbus](009-dbus.md) | V3：D-Bus 集成（桌面门面 + 按需激活） | **Proposed** | — |
+| [008-regex](008-regex.md) | V3：正则匹配（`re:` 前缀，ECMAScript） | **Done** | `lsearch_tests` 334、`self-test.sh` 22/22、`self-test-mcp.sh` 29/29 |
+| [009-dbus](009-dbus.md) | V3：D-Bus 集成（桌面门面 + 按需激活） | **Done** | `lsearch_tests` 334、`self-test-dbus.sh` 22/22 |
 
 如何核对：每张规格的 `## Scenario` 是"用户可复现的验收场景"，`## Evidence` 给出
 "我如何证明它成立"（单测名 + 命令）。

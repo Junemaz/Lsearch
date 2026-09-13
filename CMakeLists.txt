@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.16)
 project(Lsearch VERSION 0.1.0 LANGUAGES CXX)
 
+include(GNUInstallDirs)
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -13,6 +15,8 @@ add_compile_options(-Wall -Wextra -Wno-unused-parameter)
 add_compile_options($<$<CXX_COMPILER_ID:GNU>:-Wno-psabi>)
 
 find_package(SQLite3 REQUIRED)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(DBUS REQUIRED dbus-1)
 
 # ---- core 核心库（不依赖 UI，Qt GUI 将来直接复用） ----
 add_library(lsearch_core STATIC
@@ -47,6 +51,25 @@ target_link_libraries(lsearch_mcp_lib PUBLIC lsearch_ipc lsearch_core)
 add_executable(lsearch-mcp mcp/main.cpp)
 target_link_libraries(lsearch-mcp PRIVATE lsearch_mcp_lib lsearch_ipc lsearch_core)
 install(TARGETS lsearch-mcp RUNTIME DESTINATION bin)
+
+# ---- dbus（会话总线薄桥接，复用 ipc/client + mcp 校验；不触碰 core） ----
+# lsearch_dbus_lib 为纯逻辑（可无总线单测）；仅 lsearch-dbus 可执行依赖 libdbus。
+add_library(lsearch_dbus_lib STATIC
+  dbus/logic.cpp
+)
+target_include_directories(lsearch_dbus_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(lsearch_dbus_lib PUBLIC lsearch_mcp_lib lsearch_ipc lsearch_core)
+
+add_executable(lsearch-dbus dbus/main.cpp)
+target_include_directories(lsearch-dbus PRIVATE ${DBUS_INCLUDE_DIRS})
+target_link_libraries(lsearch-dbus PRIVATE lsearch_dbus_lib ${DBUS_LIBRARIES})
+install(TARGETS lsearch-dbus RUNTIME DESTINATION bin)
+
+# 按需激活：安装 session bus service 文件（Exec 由 CMAKE_INSTALL_FULL_BINDIR 展开，不硬编码）
+configure_file(dbus/com.lsearch.Daemon.service.in
+  ${CMAKE_CURRENT_BINARY_DIR}/com.lsearch.Daemon.service @ONLY)
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/com.lsearch.Daemon.service
+        DESTINATION share/dbus-1/services)
 
 # ---- daemon ----
 add_executable(lsearchd daemon/main.cpp daemon/daemon.cpp)
@@ -117,8 +140,9 @@ if(BUILD_TESTS)
     tests/test_search.cpp
     tests/test_db.cpp
     tests/test_mcp.cpp
+    tests/test_dbus.cpp
   )
-  target_link_libraries(lsearch_tests PRIVATE lsearch_core lsearch_mcp_lib)
+  target_link_libraries(lsearch_tests PRIVATE lsearch_core lsearch_mcp_lib lsearch_dbus_lib)
   add_test(NAME lsearch_tests COMMAND lsearch_tests)
 endif()
 

@@ -2,7 +2,7 @@
 
 Lsearch 是一款参考 Windows 版 **Everything** 打造的文件名即时搜索工具，专为
 麒麟（Kylin V10）等信创桌面环境设计，采用 **C++17 + Qt5 + SQLite + inotify**
-技术栈，支持 **CLI / TUI / GUI / MCP** 多前端（共享同一守护进程与索引）。
+技术栈，支持 **CLI / TUI / GUI / MCP / D-Bus** 多前端（共享同一守护进程与索引）。
 
 > Everything 之所以快，是因为 NTFS 的 MFT + USN 日志免费提供了文件名索引；
 > Linux 的 ext4 没有等价物，因此 Lsearch 必须**自建索引**：首次全量遍历 +
@@ -22,7 +22,7 @@ Lsearch 是一款参考 Windows 版 **Everything** 打造的文件名即时搜�
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j"$(nproc)"
 ```
-产物：`build/lsearchd`、`build/lsearch`、`build/lsearch-tui`、`build/lsearch-mcp`、`build/lsearch_tests`
+产物：`build/lsearchd`、`build/lsearch`、`build/lsearch-tui`、`build/lsearch-mcp`、`build/lsearch-dbus`、`build/lsearch_tests`
 
 ## 快速开始
 ```bash
@@ -54,6 +54,11 @@ MCP 前端自测（stdio JSON-RPC，S1–S11；需 python3）：
 ```bash
 ./scripts/self-test-mcp.sh      # 自动构建后跑全部 29 项
 ./scripts/self-test-mcp.sh -s   # 跳过构建
+```
+D-Bus 桥接自测（`dbus-run-session` + `gdbus`，D1–D22；需 dbus-utils）：
+```bash
+./scripts/self-test-dbus.sh     # 自动构建后跑全部 22 项
+./scripts/self-test-dbus.sh -s  # 跳过构建
 ```
 TUI 自动化自测（tmux 伪终端注入按键并断言画面；需装 tmux）：
 ```bash
@@ -94,7 +99,8 @@ lsearchd 守护进程 ── Unix socket IPC ──┬─ GUI（Qt5，已完成�
 - [x] V2：Qt5 GUI —— 实时搜索框、结果表格、双击打开、系统托盘常驻、深色现代主题
 - [x] V2：索引管理页 —— GUI 内增删索引根路径/排除前缀/选项（隐藏文件、符号链接）、一键重建
 - [x] V3：正则（`re:` 前缀，ECMAScript，大小写不敏感）
-- [ ] V3：多架构 CI、D-Bus 集成
+- [x] V3：D-Bus 集成（`lsearch-dbus` 会话总线门面 + 按需激活）
+- [ ] V3：多架构 CI
 
 ## 开源参考
 [Fsearch](https://github.com/cboxdoerfer/fsearch)、[fd](https://github.com/sharkdp/fd)、[fzf](https://github.com/junegunn/fzf)、plocate 等（见 architecture 文档）。

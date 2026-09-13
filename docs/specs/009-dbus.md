@@ -1,6 +1,6 @@
 # Lsearch Spec 009 — D-Bus 集成（桌面门面 + 按需激活）
 
-Status: **Proposed**（已按 Oracle 设计评审修订）
+Status: **Done**（已按 Oracle 设计评审修订）
 
 ## Why
 麒麟（UKUI）等 Linux 桌面的服务发现、按需启动与集成均以 D-Bus 为标准。Lsearch 目前只提供
@@ -100,15 +100,47 @@ Then 桥接退出 0
 
 ## Task
 - [x] Oracle 设计评审并据其修订本规格
-- [ ] 安装 `libdbus-1-dev`；CMake：`find_package(PkgConfig)` + `pkg_check_modules(DBUS dbus-1)`，
+- [x] 安装 `libdbus-1-dev`；CMake：`find_package(PkgConfig)` + `pkg_check_modules(DBUS dbus-1)`，
       新增 `lsearch_dbus_lib`（纯逻辑：参数映射/校验，可单测）+ `lsearch-dbus` 可执行
-- [ ] `dbus/`：注册名字（DO_NOT_QUEUE）、方法分发、Introspect/Peer、断线退出、信号处理
-- [ ] `com.lsearch.Daemon.service.in` + `configure_file` + install
-- [ ] `scripts/self-test-dbus.sh`（dbus-run-session + gdbus，含"证明激活"断言）
-- [ ] 打包集成（deb/rpm 依赖与文件）+ 文档（README/architecture）
+- [x] `dbus/`：注册名字（DO_NOT_QUEUE）、方法分发、Introspect/Peer、断线退出、信号处理
+- [x] `com.lsearch.Daemon.service.in` + `configure_file` + install
+- [x] `scripts/self-test-dbus.sh`（dbus-run-session + gdbus，含"证明激活"断言）
+- [x] 打包集成（deb/rpm 依赖与文件）+ 文档（README/architecture）
 
 ## Deliverable
 `dbus/`、`com.lsearch.Daemon.service`、自测脚本、打包与文档更新
 
 ## Evidence
-（未实现，无）
+- 构建（C++17，`-Wall -Wextra` 零告警）：
+  `cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j"$(nproc)"`（`--clean-first` 全量重建无告警）。
+  产物 `build/lsearch-dbus`；纯逻辑静态库 `lsearch_dbus_lib`（`dbus/logic.cpp`，不依赖 libdbus，
+  可无总线单测）；service 文件经 `configure_file` 生成（`CMAKE_INSTALL_FULL_BINDIR` 展开，不硬编码）。
+- 单测 `./build/lsearch_tests` → **334 checks / 0 failures**（Spec 009 新增 67 checks，8 例：
+  `dbus_make_search_args_valid`、`dbus_make_search_args_whitelist`、
+  `dbus_make_search_args_control_chars`、`dbus_make_search_args_limit_offset_clamp`、
+  `dbus_make_search_args_empty_and_regex`、`dbus_map_stats_types`、`dbus_map_stats_missing_keys`、
+  `dbus_rebuild_throttle`）。
+- 端到端 `./scripts/self-test-dbus.sh -s` → **通过 22 项 / 失败 0 项**（D1–D22，`dbus-run-session`
+  + `gdbus call --session` + 隔离 HOME/XDG_*，service 文件在总线启动前写入）：
+  - D1–D3 调用前无 `lsearch-dbus` 进程、隔离 socket 不存在、`NameHasOwner=false`（非预启动）；
+  - D4 `Search "report" 20 0 name any` 触发按需激活并命中 `AnnualReport.txt`；
+  - D5/D6 桥接进程存在，且总线 `GetConnectionUnixProcessID(com.lsearch.Daemon)` 返回的 owner
+    PID == 桥接 PID（激活的权威证明）；D7 桥接非测试脚本直接启动；D8 `lsearchd` 由桥接拉起且为
+    `build/` 版本（证明激活链）；
+  - D9 `Stats` 返回 `a{sv}` 含 `files`/`rebuilding`；D10 `Version` 非空；D11 `Introspect` 返回接口 XML；
+  - D12–D15 非法 sort / 空 query / `re:[` / 含 `\n` query → `GDBus.Error:com.lsearch.Error.InvalidArgs`，
+    D16 之后 `lsearchd` 仍存活（换行注入防护，MUST）；
+  - D17–D20 `kill` 桥接后再次调用成功（重新激活），新桥接 PID ≠ 旧，且 `lsearchd` PID 集合不变；
+  - D21/D22 `Rebuild` 首次触发成功、5s 内再次调用 → `com.lsearch.Error.Busy`（桥接侧节流）。
+- 回归：`./scripts/self-test.sh -s` → 22/22；`./scripts/self-test-mcp.sh -s` → 29/29。
+- 打包实测：deb `dpkg-deb -c` 含 `./usr/bin/lsearch-dbus` 与
+  `./usr/share/dbus-1/services/com.lsearch.Daemon.service`，`dpkg-deb -I` Depends 含 `libdbus-1-3`；
+  rpm `rpm -qlp` 含 `/usr/bin/lsearch-dbus` + service，`rpm -qpR` 含 `dbus-libs`。
+
+### 与规格字面差异（环境实测，仅此一处）
+规格 R3/Task 原要求断言桥接 `ppid == dbus-daemon`。本机 dbus 1.16.2 在服务成功取到 well-known
+name 后即回收 activation babysitter（`_dbus_spawn_async_with_babysitter`），服务被 reparent 到
+init（/proc 实测 PPid=/init，而非 dbus-daemon；对照组 `/bin/sleep`、`dbus-monitor` 等不取名的
+服务 PPID 仍是 dbus-daemon）。故自测以**更强且与 dbus 版本无关**的证据断言激活：调用前无进程/
+无 owner，调用后总线 owner PID == 桥接 PID（D3/D5/D6）。激活、kill 后重激活、daemon 不被重启
+等其余要求均按规格断言。
