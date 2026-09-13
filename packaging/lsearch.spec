@@ -6,20 +6,32 @@ Summary:        Everything-style filename search for Kylin Linux
 License:        MIT
 URL:            https://example.com/lsearch
 BuildArch:      %{ARCH}
+Requires:       sqlite-libs
+Requires:       ncurses-libs
+Requires:       qt5-qtbase
 
 %description
 Fast filename search for 麒麟/信创桌面: a daemon (lsearchd) keeps an in-memory
-index with SQLite persistence and realtime inotify updates; lsearch (CLI) and
-lsearch-tui (TUI) query it. A Qt5 GUI is planned.
+index with SQLite persistence and realtime inotify updates.
+Frontends: lsearch (CLI), lsearch-tui (TUI), lsearch-gui (Qt5) and
+lsearch-mcp (MCP stdio server for LLM agents).
+
+%prep
+# 二进制打包：无源码；%{buildroot} 由 build-rpm.sh 以 DESTDIR 预填充
+
+%build
 
 %install
-# %{buildroot} 由构建脚本设为 stage 目录
-cp -a %{buildroot}/usr %{buildroot}/usr
+# stage 由 build-rpm.sh 以 DESTDIR 预填充，这里拷入 rpmbuild 管理的 %{buildroot}
+mkdir -p %{buildroot}
+cp -a %{stage_dir}/usr %{buildroot}/
 
 %files
 /usr/bin/lsearch
 /usr/bin/lsearchd
 /usr/bin/lsearch-tui
+/usr/bin/lsearch-gui
+/usr/bin/lsearch-mcp
 /usr/share/lsearch/lsearch.conf.example
 
 %post

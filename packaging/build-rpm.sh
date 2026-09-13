@@ -18,12 +18,16 @@ cmake --build "$BLD" -j"$(nproc)" >/dev/null
 echo "==> 组装 stage..."
 rm -rf "$STAGE" "$TOP"
 DESTDIR="$STAGE" cmake --install "$BLD" >/dev/null
+if [ ! -f "$STAGE/usr/bin/lsearch-gui" ]; then
+  echo "错误: 未产出 lsearch-gui（需要 Qt5 Widgets 开发包）" >&2
+  exit 1
+fi
 mkdir -p "$TOP/BUILD" "$TOP/RPMS" "$TOP/SOURCES" "$TOP/SPECS" "$TOP/SRPMS"
 
 echo "==> 打 RPM..."
 rpmbuild --define "_topdir $TOP" \
          --define "ARCH $ARCH" \
-         --define "buildroot $STAGE" \
+         --define "stage_dir $STAGE" \
          --define "_binary_payload w2.xzdio" \
          -bb "$ROOT/packaging/lsearch.spec"
 find "$TOP/RPMS" -name '*.rpm' -exec cp {} "$ROOT/packaging/" \;
