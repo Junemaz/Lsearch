@@ -21,6 +21,9 @@ Lsearch：面向麒麟桌面的 Everything 风格文件名搜索。
 - C++17；默认仅索引用户家目录；配置保持纯文本极简。
 - 关键不变量：守护进程 shutdown 必须回收全部连接线程（不得 detach 而越过 Daemon 生命周期）。
 - 提交信息用 `<type>(<scope>): <中文说明>`，可附收尾的修复点清单。
+- **文档同步（全局规则）**：每次功能修改，提交前必须更新所有受影响文档（README、
+  docs/architecture.md、docs/specs/* 的状态/Evidence/清单、各处计数等）。任何文档滞后于
+  实现，视为功能未完成，不得提交。
 
 ## 参考
 开源的 Fsearch / fd / fzf / plocate 用于借鉴索引更新与遍历技巧，不直接整段照搬。
