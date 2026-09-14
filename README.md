@@ -1,18 +1,29 @@
 # Lsearch — 面向麒麟 V10 桌面的 Everything 风格文件名搜索
 
+> **TL;DR (EN):** Everything-style instant filename search for Kylin/Linux desktops — plus an
+> **MCP server** that lets LLM coding agents (Claude, opencode, Cursor, …) query your local
+> file index: 100k+ files, millisecond, fully local. One index, five frontends (CLI / TUI / GUI / D-Bus / MCP).
+
 Lsearch 是一款参考 Windows 版 **Everything** 打造的文件名即时搜索工具，专为
-麒麟（Kylin V10）等信创桌面环境设计，采用 **C++17 + Qt5 + SQLite + inotify**
-技术栈，支持 **CLI / TUI / GUI / MCP / D-Bus** 多前端（共享同一守护进程与索引）。
+麒麟（Kylin V10）等信创桌面环境设计，采用 **C++17 + Qt5 + SQLite + inotify** 技术栈。
+同一份索引同时服务两类消费者：
+
+- **桌面用户**：CLI / TUI / GUI / D-Bus —— 即输即搜，毫秒级返回；
+- **LLM 编码代理**：内置 **MCP server**（`lsearch-mcp`），让 Claude / opencode / Cursor
+  等代理直接检索本机文件名索引——**全本地、不上传**，无需把文件内容送去云端。
 
 > Everything 之所以快，是因为 NTFS 的 MFT + USN 日志免费提供了文件名索引；
 > Linux 的 ext4 没有等价物，因此 Lsearch 必须**自建索引**：首次全量遍历 +
 > 内存热索引 + SQLite 持久化 + inotify 增量更新，实现"即输即搜"。
 
-## 特性（V1）
+## 特性
 - 常驻守护进程 `lsearchd`：全量建索引 → SQLite 持久化 → inotify 实时增量 → 内存热索引
 - Unix domain socket IPC（明文协议，可用 ncurses/GUI/CLI 共享，脚本/socat 可调试）
 - CLI：`lsearch <关键词>` 即时输出路径，支持子串/通配符/`re:` 正则、排序、计数、`--under` 子树过滤、脚本用 `-0`
 - TUI：`lsearch-tui` 输入即搜、方向键浏览、Enter 打开（xdg-open）、F5 重建
+- GUI：Qt5 实时搜索框 + 结果表格 + 托盘常驻 + 索引管理页
+- **MCP 前端 `lsearch-mcp`**：stdio JSON-RPC，把本机文件名索引接给 LLM 编码代理（`search_files` / `index_stats` 两个工具）；兼容 legacy 与 modern 协议（含真实客户端的 `_meta.progressToken`），并由**官方 conformance 套件 + 第三方 Inspector + 真实客户端转录回归**验证（见 Spec 011）
+- D-Bus 集成：`lsearch-dbus` 会话总线门面，支持按需激活与桌面集成
 - 默认仅索引用户家目录，简单纯文本配置（`~/.config/lsearch/lsearch.conf`）
 - 自动拉起守护进程：CLI/TUI 连不上 socket 时会自动把 `lsearchd` 拉起来
 
@@ -44,6 +55,41 @@ lsearch-tui                      # 输入即搜；↑↓ 选择，Enter 打开�
 ```
 
 > TUI 的完整操作与排障见 [docs/tui-manual.md](docs/tui-manual.md)。
+
+## 接入 LLM 代理（MCP）
+`lsearch-mcp` 是一个 stdio JSON-RPC 服务器，暴露两个工具：
+`search_files`（按文件名子串/通配符/`re:` 正则搜索，可用 `under` 限定路径子树）与
+`index_stats`（索引规模与重建进度）。任何 MCP 宿主都可接入：
+
+opencode（`~/.config/opencode/opencode.jsonc`）：
+```jsonc
+{
+  "mcp": {
+    "lsearch": {
+      "type": "local",
+      "command": ["/usr/local/bin/lsearch-mcp"],
+      "enabled": true
+    }
+  }
+}
+```
+
+Claude Desktop（`claude_desktop_config.json`）：
+```json
+{
+  "mcpServers": {
+    "lsearch": { "command": "/usr/local/bin/lsearch-mcp" }
+  }
+}
+```
+
+未安装到 PATH 时，把 `command` 指向构建产物 `build/lsearch-mcp` 的绝对路径即可。
+首次调用会自动拉起 `lsearchd`（也可先手动 `lsearchd --foreground`）。
+
+> **共用索引的注意点**：MCP 宿主若以**精简环境**启动子进程（只传 `HOME`、不带 `XDG_*`），
+> 自动拉起的守护进程会落到回退路径（socket `/tmp/lsearch-$UID`、数据 `$HOME/.local/share/lsearch`），
+> 与桌面端看到的索引不是同一份。需要共用时，请在宿主配置里显式传递
+> `XDG_RUNTIME_DIR` 与 `XDG_DATA_HOME`（这是真实客户端调试中实测到的行为，见 Spec 011）。
 
 ## 自测
 一键自测核心流程（含建索引 / 搜索 / inotify 增量 / 停机补齐 / 关闭）：
