@@ -1,6 +1,6 @@
 # Lsearch Spec 015 — 守护进程并发安全（重建 × 管理命令竞态）
 
-Status: **In Progress**
+Status: **Done**
 
 ## Why
 CI（[Spec 014](014-minimal-ci.md)）上线后**首轮就抓到真实崩溃级竞态**（非测试问题）：
@@ -59,26 +59,68 @@ When 在重建期间执行搜索
 Then 搜索仍能返回（不被重建长时间阻塞）
 
 ## Task
-- [ ] 本地可复现：注入慢重建（大目录或人为延迟）后触发 `add-path`→`remove-path`
-- [ ] 串行化修复（锁序清晰、无死锁；管理命令不等待整个扫描）
-- [ ] 回归测试（复用/强化矩阵用例，或补单测）
-- [ ] 全量复跑 + CI 转绿
-- [ ] 文档同步 + Evidence → Done
+- [x] 本地可复现：注入慢重建（大目录或人为延迟）后触发 `add-path`→`remove-path`
+- [x] 串行化修复（锁序清晰、无死锁；管理命令不等待整个扫描）
+- [x] 回归测试（复用/强化矩阵用例，或补单测）
+- [x] 全量复跑 + 文档同步 + Evidence → Done
+- [ ] CI 复核：工作流目前只在 PR #9 中；**先合本修复、再合 #9**，届时 #9 的 checks 基于
+      「分支 + 已含修复的 main」重跑即为绿（见 Evidence 末尾说明）
 
 ## Deliverable
 `daemon/`（及必要的 `core/watcher.*`）的并发修复、回归测试、文档更新
 
 ## Evidence
-（待实现后填充）
 
-### CI 证据（立项依据，run 34853357610 / core）
+### 根因（5 条，全部来自代码审计）
+`rebuildAsync()` 运行在 **detached** 线程，与管理命令并发改动共享状态：
+1. **watcher 生命周期**：两者都调 `restartWatcher()` → `watcher_.stop()/start()` 无互斥；
+   同一 inotify 线程并发 `join()` + 双 `close(fd_)` ⇒ **segfault**（CI 崩溃点）。
+2. **SQLite**：唯一 `sqlite3*` 被 `doFullScan()`（`clearFiles`/`upsert`）与
+   `remove-path`/`applyWatch`（`removeSubtree`）跨线程写（sqlite3 单连接非线程安全）⇒ UB。
+3. **`cfg_`**：扫描遍历 `cfg_.paths` 时管理命令改写 `cfg_.paths/excludes/flags` ⇒ 数据竞争/迭代器失效。
+4. 重建期间的第二次 `startRebuild()` 静默 no-op ⇒ 配置变更被丢弃。
+5. detached 线程可越过 `Daemon` 生命周期（违反仓库不变量）。
+
+### 修复
+- **锁序固化**（`daemon/daemon.h` 注释）：`rebuildM_ → maintM_ → dbM_ → idxLock_`；
+  `applyWatch`（事件线程）只取 `dbM_ → idxLock_`，绝不取 `maintM_`——否则
+  `restartWatcherLocked()` 持 `maintM_` 并 join 事件线程时自锁。
+- **可 join 线程 + 协作取消**：`rebuildThread_` + `rebuildCancel_` + `rebuildCv_` + 原子
+  `rebuilding_`；每个管理命令在改动状态前 `cancelAndWaitRebuild()`。取消在 `fullScan`
+  的 readdir 循环、`popClaim`（`wait_for` 50 ms 轮询）与 `commitScan`（每 256 条 upsert）处
+  被观察 ⇒ 等待有界（毫秒级，不等待完整扫描）。
+- **发布与恢复**：仅未被取消才发布（`dbM_`/`idxLock_`，**不持** `maintM_`，只读命令仍可响应）；
+  `commitScan` 先 `BEGIN` 再 `clearFiles()`，取消即整体回滚；随后仅在 `maintM_` 下重启 watcher。
+- **生命周期**：`run()` / `~Daemon` 均 `cancelAndWaitRebuild()` + `watcher_.stop()`；
+  daemon 中已无 `.detach()`。
+- **测试钩子**：`LSEARCH_SCAN_DELAY_US`（`core/indexer.{h,cpp}` 内声明）——默认未设置 = 0，
+  仅增加每目录扫描耗时、不影响任何结果；用于让竞态在快机上稳定复现。
+
+### 复现与验证
+- **基线二进制复刻 CI 签名**：以 `git show HEAD:daemon/daemon.cpp` + 新 core 构建基线
+  `build/lsearchd`，跑强化后的矩阵 → 与 CI run `34853357610` **完全同形**：
+  `FAIL v13 remove-path -> OK b''` + `ConnectionRefusedError: [Errno 111]` + 55/61。
+- **修复后我方独立复现**（隔离 `HOME/XDG_*` + `LSEARCH_SCAN_DELAY_US=4000` + 80×25 `slowroot`，
+  `add-path` → 立即 `remove-path` 循环 20 轮）：`RESULT: iters=20 crashes=0`，daemon 存活。
+- 代理另跑：`repro.sh 20`（带延迟）与 `repro.sh 20`（不带延迟、大目录）均 `crashes=0`。
+
+### 回归（修复后，本机）
 ```
-FAIL  v13 remove-path -> OK b''
-Traceback (most recent call last):
-  File "<stdin>", line 350, in <module>
-  File "<stdin>", line 286, in cfg_get
-  File "<stdin>", line 22, in talk
-ConnectionRefusedError: [Errno 111] Connection refused
-IPC 负形状/边界矩阵：通过 55 项，失败 1 项，SKIP 0 项
+cmake --build build            clean（无告警）
+lsearch_tests                  552 checks, 0 failures
+self-test / ipc / mcp / dbus   25 / 18 / 37 / 22
+ipc-external / ipc-diff        7 / 13
+ipc-matrix                     61/61 ×3 连续（含本竞态并发回归用例）
+运行前后 pgrep -x lsearchd     仅真实守护进程 455627
 ```
-（同一 run 的 `mcp-external` 亦挂起，已由 Spec 014 的 `timeout` 护栏覆盖。）
+
+### 不变量
+- shutdown 回收全部连接线程与新增的重建线程；daemon 中无 `.detach()`
+- 单例锁语义未变（`daemon/main.cpp` 未改，`self-test` 25/25 含并发冷启动用例）
+- 无全局锁跨整段扫描；搜索只取 `idxLock_`
+
+### CI 复核说明
+`.github/workflows/ci.yml` 目前只存在于 **未合并** 的 [Spec 014](014-minimal-ci.md) PR 中，
+故本修复所在分支不会触发 CI。合并顺序建议：**先合并本修复，再合并 SPEC 014 的 PR**——
+后者届时基于「其分支 + 已含本修复的 main」重跑 checks，`core` 即为绿（这正是 CI 抓到本缺陷
+→ 修复 → CI 转绿的闭环）。

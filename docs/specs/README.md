@@ -31,7 +31,7 @@
 | [011-test-hardening](011-test-hardening.md) | 协议测试加固（外部验证器 + 转录回放 + 负形状矩阵） | **Done** | conformance `server` PASS（基线内预期）、Inspector 3/3、replay 6/6（合成 + 真实 opencode 转录）、matrix 27/27 |
 | [012-ipc-hardening](012-ipc-hardening.md) | IPC 协议加固（外部验证 + 帧完整性修复） | **Done** | `nc -U` 第三方 7/7、独立客户端×CLI 逐字节差分 13/13、负形状矩阵 33/33；`search3` 转义修复 `\n`/`\t` 帧破坏；`lsearch_tests` 511 |
 | [013-ipc-input-validation](013-ipc-input-validation.md) | IPC 输入校验与配置往返完整性（`ERR bad path`/`ERR bad limit`） | **Done** | `lsearch_tests` 552、IPC 矩阵 61/61（含拒绝后零副作用与 `remove-path` 落盘）、外部 7/7、差分 13/13 |
-| [015-daemon-concurrency](015-daemon-concurrency.md) | 守护进程并发安全（重建 × 管理命令竞态） | **Proposed** | 立项证据：CI 中 `add-path`（异步重建）→ `remove-path` 致 daemon 崩溃（矩阵 55/61）；014 首轮 CI 抓到 |
+| [015-daemon-concurrency](015-daemon-concurrency.md) | 守护进程并发安全（重建 × 管理命令竞态） | **Done** | 根因=detached 重建线程并发改 watcher/sqlite/cfg；修复后我方复现 20 轮 add/remove **0 崩溃**、矩阵 61/61×3、全套件绿 |
 | [016-watcher-correctness](016-watcher-correctness.md) | watcher 增量正确性（隐藏过滤 / 重命名 / 统计溢出） | **Proposed** | 实测：子目录隐藏文件被索引、`mv` 原子保存漏索引、`stats.size` 2^63 溢出、`watcher.cpp:155` 条件写反；决定默认索引隐藏 |
 | [017-index-memory](017-index-memory.md) | 索引内存精简与可选低内存模式（`hot_index=memory\\|sqlite`） | **Proposed** | 立项数据：317k 项 RSS 243 MiB（真数据仅 31 MB）、内存 7–12 ms vs SQLite 25–48 ms |
 
