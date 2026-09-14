@@ -28,7 +28,8 @@ class Client {
   // 单行 OK/ERR 命令
   bool command(const std::string& req, std::string& err);
 
-  // search：结果写 out，total 返回命中总数（可能多于返回条数）
+  // search：结果写 out。v3 可用时经 search3（path 已解码，total=返回条数）；否则
+  // 原样走 legacy `search`（旧 daemon，线上字节不变）。
   bool search(const std::string& query, SortKey sort, size_t limit,
               bool dirs_only, bool files_only,
               std::vector<SearchResult>& out, size_t* total, std::string& err);
@@ -48,6 +49,8 @@ class Client {
   bool capabilities(std::vector<std::string>& commands, std::string& err);
   // 是否支持 search2/count2（惰性经 capabilities 探测；旧 daemon → false）。
   bool supportsV2();
+  // 是否支持 search3（帧完整性转义；惰性经 capabilities 探测；旧 daemon → false）。
+  bool supportsV3();
   // 最近一次 searchEx 是否走了 legacy 降级路径。
   bool usedLegacySearch() const { return lastSearchLegacy_; }
 
@@ -77,10 +80,13 @@ class Client {
                             std::string& err);
   bool countLegacyFallback(const std::string& query, bool dirs_only, bool files_only,
                            uint64_t& total, bool& capped, std::string& err);
+  // 读取到 END 为止的结果行；unescape=true 时按 search3 还原 path 字段。
+  bool readResultRows(bool unescape, SearchOutcome& out, std::string& err);
 
   int fd_ = -1;
   std::string recvBuf_;
   int v2_ = -1;                 // -1 未知 / 0 不支持 / 1 支持 search2
+  int v3_ = -1;                 // -1 未知 / 0 不支持 / 1 支持 search3
   bool lastSearchLegacy_ = false;
 };
 

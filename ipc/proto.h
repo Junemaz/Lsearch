@@ -7,6 +7,7 @@
 //   stats
 //   search <limit> <dirs_only> <files_only> <sort> <query...>
 //   search2 <limit> <dirs_only> <files_only> <sort> <under64> <query...>
+//   search3 <limit> <dirs_only> <files_only> <sort> <under64> <query...>
 //   count2 <dirs_only> <files_only> <under64> <query...>
 //   capabilities
 //   rebuild
@@ -27,11 +28,31 @@
 //   OK / ERR <msg>                                  —— 单行命令
 //   OK <count>\n<结果行...>\nEND\n                   —— search（旧语义：count=截断后条数）
 //   OK <returned> <total> <total_capped>\n<结果行...>\nEND\n —— search2（total 精确或下界）
+//   OK <returned> <total> <total_capped> esc=1\n<结果行...>\nEND\n —— search3（path 转义）
 //   OK <total> <total_capped>\n                      —— count2
 //   OK\ncommands=<csv>\nEND\n                        —— capabilities
 //   OK\n<key=value...>\nEND\n                        —— stats / version / get-config
 // 结果行格式：path<TAB>is_dir<TAB>size<TAB>mtime<TAB>path_matched
-// 非法 under（含缺字段）→ "ERR bad under"；非法正则沿用 "ERR bad regex: ..."。
+//
+// search3（帧完整性）：Linux 文件名可含 TAB/LF/CR，若原样写入结果行会撕裂帧
+//   （LF 伪造 END、TAB 使字段错位）。search3 仅对 path 字段转义，转义表（顺序：
+//   先 '\' 再其余，保证单射可逆）：
+//     '\'  -> "\\"
+//     TAB  -> "\t"
+//     LF   -> "\n"
+//     CR   -> "\r"
+//   其余字段（is_dir/size/mtime/path_matched）为数字，不转义。仅支持 search3 的
+//   客户端（capabilities 含 search3）才走此路径；旧客户端仍用 search2，字节不变。
+//
+// 错误目录（ERR <msg>，单行）：
+//   ERR bad args              —— search 缺字段（splitHead 不足）
+//   ERR bad sort              —— sort 不在 name/path/size/mtime
+//   ERR bad regex: <msg>      —— re: 模式非法（<msg> 已折叠换行）
+//   ERR bad under             —— search2/search3/count2 缺字段或 under64 非法
+//   ERR unknown command       —— 未知动词
+//   ERR paths must not be empty —— set-paths 传空
+//   ERR bad opts              —— set-opts 参数不足
+//   ERR line too long         —— 单行请求超过 1 MiB（随后关闭该连接）
 #include <cstddef>
 #include <string>
 #include <vector>
@@ -48,6 +69,11 @@ bool splitHead(const std::string& line, size_t headCount,
 // 解析一条结果行 -> FileEntry
 bool parseResultLine(const std::string& line, bool& is_dir, long long& size,
                      long long& mtime, bool& path_matched, std::string& path);
+
+// search3 结果行 path 字段的转义/还原（唯一实现处，daemon 编码、client 解码共用，
+// 避免两处转义表漂移）。未识别的 "\x" 原样保留；unescape(escape(s)) == s。
+std::string escapeField(const std::string& s);
+std::string unescapeField(const std::string& s);
 
 }  // namespace proto
 }  // namespace lsearch

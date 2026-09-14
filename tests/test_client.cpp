@@ -2,6 +2,7 @@
 
 #include "core/search.h"
 #include "ipc/client.h"
+#include "ipc/proto.h"
 
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -244,4 +245,106 @@ TEST(client_supports_v2_positive_search2_count2) {
   CHECK(c.countEx("q", false, false, "/data", total, capped, err));
   CHECK_EQ(total, (uint64_t)9);
   CHECK(capped);
+}
+
+TEST(proto_escape_roundtrip_embedded_controls) {
+  const std::string raw = std::string("evil\nEND\nOK 99\tta\tb.txt\r\\path");
+  const std::string esc = proto::escapeField(raw);
+  CHECK_EQ(esc, std::string("evil\\nEND\\nOK 99\\tta\\tb.txt\\r\\\\path"));
+  CHECK_EQ(proto::unescapeField(esc), raw);
+  // 单射：真实反斜杠 + 'n' 不被误还原为换行；未识别转义原样保留。
+  CHECK_EQ(proto::unescapeField(proto::escapeField(std::string("\\n"))), std::string("\\n"));
+  CHECK_EQ(proto::unescapeField(std::string("keep\\q")), std::string("keep\\q"));
+}
+
+TEST(client_search_v3_decodes_escaped_paths) {
+  std::atomic<int> v3{0}, v2{0};
+  StubServer srv([&](const std::string& line) -> std::string {
+    if (line == "ping") return "OK pong\n";
+    if (line == "capabilities") return "OK\ncommands=search,search2,search3,count2\nEND\n";
+    if (line.rfind("search3 ", 0) == 0) {
+      ++v3;
+      // 第一行 path 含被转义的 LF（本会伪造 END），第二行含被转义的 TAB。
+      return "OK 2 2 0 esc=1\n"
+             "/home/evil\\nEND\\nOK 99\t0\t1\t2\t0\n"
+             "/home/ta\\tb.txt\t0\t3\t4\t1\n"
+             "END\n";
+    }
+    if (line.rfind("search2 ", 0) == 0) {
+      ++v2;
+      return "ERR unexpected search2\n";
+    }
+    return "ERR unknown command\n";
+  });
+  Client c;
+  CHECK(connectClient(c, srv.path()));
+  SearchOutcome out;
+  std::string err;
+  CHECK(c.searchEx("evil", SortKey::Name, 20, false, false, "", out, err));
+  CHECK(!c.usedLegacySearch());
+  CHECK_EQ(v3.load(), 1);
+  CHECK_EQ(v2.load(), 0);
+  CHECK_EQ(out.total, (uint64_t)2);
+  CHECK_EQ(out.results.size(), (size_t)2);
+  CHECK_EQ(out.results[0].entry.path, std::string("/home/evil\nEND\nOK 99"));
+  CHECK_EQ(out.results[0].entry.name, std::string("evil\nEND\nOK 99"));
+  CHECK_EQ(out.results[1].entry.path, std::string("/home/ta\tb.txt"));
+  CHECK_EQ(out.results[1].entry.name, std::string("ta\tb.txt"));
+  CHECK(out.results[1].path_matched);
+}
+
+TEST(client_search_api_prefers_v3_for_legacy_callers) {
+  std::atomic<int> v3{0}, legacy{0};
+  StubServer srv([&](const std::string& line) -> std::string {
+    if (line == "ping") return "OK pong\n";
+    if (line == "capabilities") return "OK\ncommands=search,search3\nEND\n";
+    if (line.rfind("search3 ", 0) == 0) {
+      ++v3;
+      return "OK 1 1 0 esc=1\n/tmp/x\\ny\\tz\t1\t9\t9\t0\nEND\n";
+    }
+    if (line.rfind("search ", 0) == 0) {
+      ++legacy;
+      return "OK 1\n/tmp/x\ny\tz\t1\t9\t9\t0\nEND\n";
+    }
+    return "ERR unknown command\n";
+  });
+  Client c;
+  CHECK(connectClient(c, srv.path()));
+  std::vector<SearchResult> out;
+  size_t total = 0;
+  std::string err;
+  CHECK(c.search("x", SortKey::Name, 20, false, false, out, &total, err));
+  CHECK_EQ(v3.load(), 1);
+  CHECK_EQ(legacy.load(), 0);
+  CHECK_EQ(out.size(), (size_t)1);
+  CHECK_EQ(total, (size_t)1);
+  CHECK_EQ(out[0].entry.path, std::string("/tmp/x\ny\tz"));
+}
+
+TEST(client_search2_not_unescaped_without_v3) {
+  std::atomic<int> v3{0}, v2{0};
+  StubServer srv([&](const std::string& line) -> std::string {
+    if (line == "ping") return "OK pong\n";
+    if (line == "capabilities") return "OK\ncommands=search,search2,count2\nEND\n";
+    if (line.rfind("search3 ", 0) == 0) {
+      ++v3;
+      return "ERR unknown command\n";
+    }
+    if (line.rfind("search2 ", 0) == 0) {
+      ++v2;
+      return "OK 1 1 0\n/home/a\\tb.txt\t0\t1\t2\t0\nEND\n";
+    }
+    return "ERR unknown command\n";
+  });
+  Client c;
+  CHECK(connectClient(c, srv.path()));
+  SearchOutcome out;
+  std::string err;
+  CHECK(c.searchEx("a", SortKey::Name, 20, false, false, "", out, err));
+  CHECK(!c.usedLegacySearch());
+  CHECK_EQ(v3.load(), 0);
+  CHECK_EQ(v2.load(), 1);
+  CHECK_EQ(out.results.size(), (size_t)1);
+  // v2 不做转义解码：响应里的 bytes 原样保留（backslash + 't' 不得变成 TAB）。
+  CHECK_EQ(out.results[0].entry.path, std::string("/home/a\\tb.txt"));
 }
