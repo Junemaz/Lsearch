@@ -129,7 +129,7 @@ $ lsearch b.txt  → /…/home/ta\tb.txt          （TAB 保留，未串列）
 |---|---|
 | `scripts/self-test-ipc-external.sh -s` | 第三方 `nc -U` 直连原始协议：**7/7** |
 | `scripts/self-test-ipc-diff.sh -s` | 独立客户端 × CLI 逐字节差分：**13/13** |
-| `scripts/self-test-ipc-matrix.sh -s` | 负形状/边界矩阵：**33 PASS / 0 FAIL / 0 SKIP** |
+| `scripts/self-test-ipc-matrix.sh -s` | 负形状/边界矩阵：**33 PASS / 0 FAIL / 0 SKIP**（Spec 013 后扩展至 61） |
 
 - 独立客户端 `scripts/ipc-spec-only-client.py` 仅据 `ipc/proto.h` + 本规格实现
   （未读 `ipc/*.cpp`、`daemon/*.cpp`；`basedpyright` 无诊断）。
@@ -162,6 +162,10 @@ mcp matrix / inspector / replay×2   → 27 / 3 / 6 / 6；conformance PASS
 6. **文档修订**：002 R5 的"所有响应 OK+END"表述与命令清单已修正；`ipc/proto.h` 补齐
    `search3`、`esc=1`、转义表与 8 条错误目录；`docs/architecture.md` 的检索路径与 IPC 外部验证
    章节同步。
+7. **（Spec 013 收口）`stats`/`get-config` 的 value 转义最终判定不需要**：其值来自**行式**
+   配置文件（LF/CR 本就不可表示），IPC 请求行亦以 `\n` 分帧；真正可达的是**含逗号路径**在
+   CSV 中的歧义，已由 [Spec 013](013-ipc-input-validation.md) R1 的输入校验解决，无需新增
+   动词或转义。
 
 ### 探针实录（Spec 012 立项依据）
 隔离环境 + 含 `\n`/`\t` 的文件名 + `nc -U` 直连原始协议：

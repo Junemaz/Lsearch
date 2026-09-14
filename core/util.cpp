@@ -242,6 +242,45 @@ bool base64Decode(const std::string& in, std::string& out) {
   return true;
 }
 
+bool validConfigPath(const std::string& p, std::string& why) {
+  if (p.empty()) {
+    why = "empty";
+    return false;
+  }
+  if (p.size() > kConfigPathMax) {
+    why = "too long";
+    return false;
+  }
+  if (p.front() == ' ' || p.back() == ' ') {
+    why = "leading/trailing space";
+    return false;
+  }
+  for (unsigned char c : p) {
+    if (c == ',') {
+      why = "comma";
+      return false;
+    }
+    if (c < 0x20 || c == 0x7f) {
+      why = "control char";
+      return false;
+    }
+  }
+  why.clear();
+  return true;
+}
+
+bool parseLimit(const std::string& s, std::size_t& out) {
+  if (s.empty()) return false;
+  std::size_t v = 0;
+  for (unsigned char c : s) {
+    if (c < '0' || c > '9') return false;
+    v = v * 10 + static_cast<std::size_t>(c - '0');
+    if (v > kLimitMax) return false;
+  }
+  out = v;
+  return true;
+}
+
 bool globMatch(const std::string& pattern, const std::string& text) {
   // 经典递归 glob：* 匹配任意序列，? 匹配单个字符，大小写不敏感
   const std::string& p = pattern;

@@ -142,6 +142,7 @@ if(BUILD_TESTS)
     tests/test_mcp.cpp
     tests/test_client.cpp
     tests/test_dbus.cpp
+    tests/test_validate.cpp
   )
   target_link_libraries(lsearch_tests PRIVATE lsearch_core lsearch_mcp_lib lsearch_dbus_lib)
   add_test(NAME lsearch_tests COMMAND lsearch_tests)

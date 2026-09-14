@@ -8,6 +8,11 @@
 #   无换行 EOF；空行跳过；CRLF；非 UTF-8 query；单连接多请求顺序；
 #   两并发连接；单行 >1MiB（ERR line too long 并关闭）；
 #   文件名含 \n / \t / \r / \\（search3 转义帧，未声明 search3 时 SKIP(v3)）。
+# Spec 013 补充用例（未实现时逐条 SKIP(v13)）：
+#   search/search2/search3 非法 limit（非数字 / 负数 / 超上限）-> ERR bad limit；
+#   合法 limit 响应形状不变；add-path 非法路径（逗号 / TAB / 空）-> ERR bad path
+#   且 get-config 与 lsearch.conf 零改动；合法 add-path 往返为单个元素；
+#   remove-path 落盘（get-config 与配置文件均移除）；set-excludes _ / set-paths 回归。
 #
 #   ./scripts/self-test-ipc-matrix.sh        # 构建后运行
 #   ./scripts/self-test-ipc-matrix.sh -s     # 跳过构建
@@ -142,6 +147,11 @@ if os.environ.get("LSEARCH_IPC_FORCE_NO_V3") == "1":
     HAS_V3 = False
 print(f"  [caps] search3={'yes' if HAS_V3 else 'no'}"
       + (" (强制 NO_V3 测试钩子)" if os.environ.get("LSEARCH_IPC_FORCE_NO_V3") == "1" else ""))
+
+# —— Spec 013 能力探测：limit 未校验时新增用例一律 SKIP(v13)，不使套件变红 ——
+probe013, _ = talk(b"search2 abc 0 0 name - x\n")
+HAS_V13 = (probe013 == b"ERR bad limit\n")
+print(f"  [caps] spec013={'yes' if HAS_V13 else 'no'}")
 
 # —— 未知动词 ——
 d, _ = talk(b"frobnicate\n")
@@ -308,6 +318,140 @@ for name, query, fname, escaped in V3_CASES:
 # —— 空查询（R4: 返回空结果，不是错误）——
 d, _ = talk(b"search2 50 0 0 name - \n")
 (ok if d.startswith(b"OK 0 0 0\n") else bad)("空 query -> OK 0（非错误）", repr(d[:40]))
+
+# ============================================================================
+# Spec 013 — IPC 输入校验与配置往返完整性（R1 / R1b / R2）
+# limit 校验未就绪时（见上方探测）逐条 SKIP(v13)，既有断言不受影响。
+# ============================================================================
+def v13_ready(name):
+    if not HAS_V13:
+        skip(name, "SKIP(v13): Spec 013 未实现")
+        return False
+    return True
+
+# —— R2：非法 limit -> ERR bad limit（search / search2 / search3）——
+BAD_LIMITS = [("非数字", b"abc"), ("负数", b"-1"), ("超上限 1048577", b"1048577")]
+for label, lim in BAD_LIMITS:
+    n = f"v13 search limit {label} -> ERR bad limit"
+    if v13_ready(n):
+        d, _ = talk(b"search " + lim + b" 0 0 name x\n")
+        (ok if d == b"ERR bad limit\n" else bad)(n, repr(d[:60]))
+for label, lim in BAD_LIMITS:
+    n = f"v13 search2 limit {label} -> ERR bad limit"
+    if v13_ready(n):
+        d, _ = talk(b"search2 " + lim + b" 0 0 name - x\n")
+        (ok if d == b"ERR bad limit\n" else bad)(n, repr(d[:60]))
+for label, lim in BAD_LIMITS:
+    n = f"v13 search3 limit {label} -> ERR bad limit"
+    if not HAS_V3:
+        skip(n, "SKIP(v3): capabilities 未声明 search3")
+    elif v13_ready(n):
+        d, _ = talk(b"search3 " + lim + b" 0 0 name - x\n")
+        (ok if d == b"ERR bad limit\n" else bad)(n, repr(d[:60]))
+
+# —— R2：合法 limit 响应形状不变（OK <r> <t> <c> ... END）——
+def v13_valid_limit(name, payload):
+    if not v13_ready(name):
+        return
+    d, _ = talk(payload)
+    first = d.split(b"\n", 1)[0]
+    parts = first.decode("utf-8", "replace").split(" ")
+    good = (len(parts) == 4 and parts[0] == "OK"
+            and all(p.isdigit() for p in parts[1:]) and d.endswith(b"END\n"))
+    (ok if good else bad)(name, first.decode("utf-8", "replace"))
+v13_valid_limit("v13 search2 limit 200 响应形状不变", b"search2 200 0 0 name - x\n")
+v13_valid_limit("v13 search2 limit 0 仍被接受", b"search2 0 0 0 name - x\n")
+
+# —— R1：非法路径 -> ERR bad path，且拒绝后内存/磁盘配置零改动 ——
+def cfg_get():
+    d, _ = talk(b"get-config\n")
+    fields = {}
+    for ln in d.split(b"\n"):
+        if b"=" in ln:
+            k, _, v = ln.partition(b"=")
+            fields[k] = v
+    return d, fields
+
+def cfg_file_bytes(fields):
+    p = fields.get(b"config_file", b"").decode("utf-8", "replace")
+    if not p:
+        return None
+    try:
+        with open(p, "rb") as f:
+            return f.read()
+    except OSError:
+        return None
+
+base_cfg, base_fields = cfg_get()
+base_bytes = cfg_file_bytes(base_fields)
+
+for label, payload in [
+    ("逗号", b"add-path /tmp/a,b\n"),
+    ("TAB", b"add-path /tmp/a\tb\n"),
+    ("空参数", b"add-path\n"),
+]:
+    n_err = f"v13 add-path {label} -> ERR bad path"
+    if not v13_ready(n_err):
+        continue
+    d, _ = talk(payload)
+    (ok if d == b"ERR bad path\n" else bad)(n_err, repr(d[:60]))
+    d2, f2 = cfg_get()
+    (ok if d2 == base_cfg else bad)(
+        f"v13 add-path {label} 拒绝后 get-config 未变更", repr(d2[:60]))
+    b2 = cfg_file_bytes(f2)
+    (ok if b2 == base_bytes else bad)(
+        f"v13 add-path {label} 拒绝后 lsearch.conf 字节未变更",
+        f"before={len(base_bytes) if base_bytes else 0}B after={len(b2) if b2 else 0}B")
+
+# —— R1：合法 add-path 往返为单个元素且恰好落盘一次 ——
+VALID_DIR = os.path.join(HOME, "validroot")
+os.makedirs(VALID_DIR, exist_ok=True)
+vp = os.fsencode(VALID_DIR)
+
+n = "v13 add-path 合法目录 -> OK"
+if v13_ready(n):
+    d, _ = talk(b"add-path " + vp + b"\n")
+    (ok if d == b"OK\n" else bad)(n, repr(d[:60]))
+
+    d2, f2 = cfg_get()
+    paths_line = f2.get(b"paths", b"")
+    single = paths_line.count(vp) == 1 and paths_line.split(b",").count(vp) == 1
+    (ok if single else bad)("v13 合法路径 get-config 为单元素（未分裂）", repr(paths_line[:120]))
+
+    b2 = cfg_file_bytes(f2) or b""
+    (ok if b2.count(vp) == 1 else bad)(
+        "v13 合法路径写入 lsearch.conf 恰好一次", f"count={b2.count(vp)}")
+
+# —— R1b：remove-path 落盘（重启不复活）——
+n = "v13 remove-path -> OK"
+if v13_ready(n):
+    d, _ = talk(b"remove-path " + vp + b"\n")
+    (ok if d == b"OK\n" else bad)(n, repr(d[:60]))
+
+    d2, f2 = cfg_get()
+    paths_line = f2.get(b"paths", b"")
+    (ok if vp not in paths_line.split(b",") else bad)(
+        "v13 remove-path 后 get-config 不再包含", repr(paths_line[:120]))
+
+    b2 = cfg_file_bytes(f2) or b""
+    (ok if vp not in b2 else bad)(
+        "v13 remove-path 后 lsearch.conf 不再包含", f"count={b2.count(vp)}")
+
+# —— 回归：set-excludes _ 仍清空 ——
+n = "v13 回归 set-excludes _ -> excludes 清空"
+if v13_ready(n):
+    d, _ = talk(b"set-excludes _\n")
+    d2, f2 = cfg_get()
+    good = (d == b"OK\n") and f2.get(b"excludes", b"") == b""
+    (ok if good else bad)(n, f"resp={d[:20]!r} excl={f2.get(b'excludes', b'')[:40]!r}")
+
+# —— 回归：合法 set-paths <dir> 仍工作 ——
+n = "v13 回归 set-paths 合法目录 -> OK"
+if v13_ready(n):
+    d, _ = talk(b"set-paths " + vp + b"\n")
+    d2, f2 = cfg_get()
+    good = (d == b"OK\n") and f2.get(b"paths", b"") == vp
+    (ok if good else bad)(n, f"resp={d[:20]!r} paths={f2.get(b'paths', b'')[:80]!r}")
 
 # —— 收尾：守护进程存活 ——
 (ok if alive() else bad)("矩阵后守护进程存活")

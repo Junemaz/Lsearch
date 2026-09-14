@@ -38,6 +38,19 @@ set-opts`。**并非所有响应都带 `END`**：
 
 socket chmod 0600，socket 目录 `mkdir 0700`，单例锁文件 `<sock>.lock`（flock，0600，
 随进程退出释放）。单行请求上限 1 MiB，超限返回 `ERR line too long` 并关闭该连接。
+
+路径与 `limit` 校验（[Spec 013](013-ipc-input-validation.md)）：
+- `add-path` 的参数**不做 CSV 分割**（整串即一个路径）；`set-paths` / `set-excludes`
+  才按逗号取 CSV 并对**每个元素**校验。合法路径 = 非空、不含 `,`、不含控制字符
+  （`<0x20` 与 `0x7f`）、无首尾空格/TAB、长度 ≤ 4096；违规返回 `ERR bad path`，
+  且不修改内存配置、不落盘、不触发重建。`set-paths` 整体为空仍是
+  `ERR paths must not be empty`；`set-excludes` 的 `_` 哨兵仅整体参数等于 `_` 时清空。
+- `remove-path` 仅校验非空（便于精确移除历史上含逗号的条目），成功移除后**调用
+  `Config::save()` 落盘**（守护进程重启后不再复活）。
+- `search` / `search2` / `search3` 的 `limit` 必须为纯十进制 ASCII 数字（非空、无符号、
+  无前导 `+`）且 `0 ≤ limit ≤ 1048576`，否则返回 `ERR bad limit`；校验顺序为
+  `splitHead` → `limit` → `sort` → `under` → `query`。合法输入响应逐字节不变（`0` 仍表示不限制）。
+
 （追加式扩展见 [Spec 010](010-search-protocol.md)：`search2`/`count2`/`capabilities`；
 帧完整性 `search3` + 行上限见 [Spec 012](012-ipc-hardening.md)。）
 
