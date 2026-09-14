@@ -115,6 +115,18 @@ def shape(v):
         return "null"
     return "string"
 
+def shape_match(a, b):
+    """递归比较 shape() 结果。空数组与任意数组视为结构兼容：回放跑在隔离空索引上，
+    结果集基数（如 search_files.results 条数）由数据决定，不构成协议差异；
+    非空时仍逐元素比较元素结构。"""
+    if isinstance(a, dict) and isinstance(b, dict):
+        return a.keys() == b.keys() and all(shape_match(a[k], b[k]) for k in a)
+    if isinstance(a, list) and isinstance(b, list):
+        if not a or not b:
+            return True
+        return shape_match(a[0], b[0])
+    return a == b
+
 def text_payload(msg):
     """For tools/call results, parse content[0].text as JSON."""
     try:
@@ -204,9 +216,9 @@ for idx, req_entry in enumerate(requests):
 
         # 3) structural equivalence vs the recorded response
         exp = recorded.get(str(rid))
-        struct_ok = exp is not None and shape(resp) == shape(exp)
+        struct_ok = exp is not None and shape_match(shape(resp), shape(exp))
         if exp is not None and method == "tools/call":
-            struct_ok = struct_ok and shape(text_payload(resp)) == shape(text_payload(exp))
+            struct_ok = struct_ok and shape_match(shape(text_payload(resp)), shape(text_payload(exp)))
         if exp is None:
             struct_ok = False
             note = (note + "; no recorded response for id").strip("; ")
