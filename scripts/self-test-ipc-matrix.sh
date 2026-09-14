@@ -44,6 +44,9 @@ fi
 echo "==> 1/ 隔离环境 + 构造 fixture（含 \\n / \\t 文件名）"
 rm -rf "$T"; mkdir -p "$T/home/sub" "$T/run" "$T/config" "$T/data"
 export HOME="$T/home" XDG_CONFIG_HOME="$T/config" XDG_DATA_HOME="$T/data" XDG_RUNTIME_DIR="$T/run"
+# Spec 015 回归注入：LSEARCH_SCAN_DELAY_US 让每目录扫描多睡若干微秒，
+# 使"重建 × 管理命令"竞态在快机上也可控复现（老 daemon 忽略此变量，不影响其用例）。
+export LSEARCH_SCAN_DELAY_US="${LSEARCH_SCAN_DELAY_US:-4000}"
 python3 - "$T/home" <<'PY'
 import os, sys
 home = sys.argv[1]
@@ -58,6 +61,14 @@ for rel, size in {
 for evil in ["evilX\nEND\nOK 99", "tabX\tb.txt", "crX\rname", "bsX\\slash"]:
     open(os.path.join(home, evil), "wb").close()
 os.makedirs(os.path.join(home, "sub"), exist_ok=True)
+# Spec 015 slowroot：HOME 之外的多目录树，避免 inotify 噪音；add-path 它会让重建
+# 持续足够久，令紧随的 remove-path 稳定落在扫描窗口内（复现 CI 崩溃点）。
+slow = os.path.join(os.path.dirname(home), "slowroot")
+for i in range(80):
+    d = os.path.join(slow, "d%03d" % i)
+    os.makedirs(d, exist_ok=True)
+    for j in range(25):
+        open(os.path.join(d, "f%02d.txt" % j), "wb").close()
 PY
 SOCK="$T/run/lsearch.sock"
 "$ROOT/build/lsearchd" --foreground </dev/null >"$T/lsearchd.log" 2>&1 &
@@ -404,7 +415,9 @@ for label, payload in [
         f"before={len(base_bytes) if base_bytes else 0}B after={len(b2) if b2 else 0}B")
 
 # —— R1：合法 add-path 往返为单个元素且恰好落盘一次 ——
-VALID_DIR = os.path.join(HOME, "validroot")
+# Spec 015：add-path 目标是 HOME 外的多目录 slowroot，重建耗时由上面的延迟钩子拉长，
+# 使随后的 remove-path 与重建并发（复现 CI run 34853357610 的 remove-path 崩溃）。
+VALID_DIR = os.path.join(os.path.dirname(HOME), "slowroot")
 os.makedirs(VALID_DIR, exist_ok=True)
 vp = os.fsencode(VALID_DIR)
 
@@ -422,11 +435,24 @@ if v13_ready(n):
     (ok if b2.count(vp) == 1 else bad)(
         "v13 合法路径写入 lsearch.conf 恰好一次", f"count={b2.count(vp)}")
 
-# —— R1b：remove-path 落盘（重启不复活）——
+# —— R1b：remove-path 落盘（重启不复活）；Spec 015：重建仍在扫描时执行 ——
 n = "v13 remove-path -> OK"
 if v13_ready(n):
     d, _ = talk(b"remove-path " + vp + b"\n")
-    (ok if d == b"OK\n" else bad)(n, repr(d[:60]))
+    survived = alive()  # Spec 015 R1：并发 remove-path 后守护进程须存活
+    if d == b"OK\n" and survived:
+        # Spec 015 回归压测：重建边扫描边循环 add/remove，制造 restartWatcher 与
+        # cfg_/DB 变更的交错；任一命令异常或 daemon 崩溃即 fail（CI run 34853357610 形态）。
+        for _ in range(6):
+            ra, _ = talk(b"add-path " + vp + b"\n")
+            if ra != b"OK\n" or not alive():
+                survived = False
+                break
+            rr, _ = talk(b"remove-path " + vp + b"\n")
+            if rr != b"OK\n" or not alive():
+                survived = False
+                break
+    (ok if (d == b"OK\n" and survived) else bad)(n, repr(d[:60]))
 
     d2, f2 = cfg_get()
     paths_line = f2.get(b"paths", b"")

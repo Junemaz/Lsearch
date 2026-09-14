@@ -23,23 +23,30 @@ namespace lsearch {
 Daemon::Daemon(Config cfg) : cfg_(std::move(cfg)) {}
 
 Daemon::~Daemon() {
-  watcher_.stop();
+  cancelAndWaitRebuild();
+  {
+    std::lock_guard<std::mutex> ml(maintM_);
+    watcher_.stop();
+  }
   if (listenFd_ >= 0) ::close(listenFd_);
 }
 
 void Daemon::shutdown() { running_ = false; }
 
 void Daemon::applyWatch(const WatchEvent& ev) {
+  // 事件线程：只取 dbM_ -> idxLock_，绝不取 maintM_（见 daemon.h 锁序说明），
+  // 否则 restartWatcherLocked 持 maintM_ 且 join 本线程时会自锁。
   switch (ev.type) {
     case WatchEvent::Added:
-    case WatchEvent::Modified:
+    case WatchEvent::Modified: {
+      std::lock_guard<std::mutex> dl(dbM_);
       db_.upsert(ev.entry);
-      {
-        std::unique_lock<std::shared_mutex> lk(idxLock_);
-        idx_.add(ev.entry);
-      }
+      std::unique_lock<std::shared_mutex> lk(idxLock_);
+      idx_.add(ev.entry);
       break;
+    }
     case WatchEvent::Removed: {
+      std::lock_guard<std::mutex> dl(dbM_);
       std::unique_lock<std::shared_mutex> lk(idxLock_);
       idx_.removePathAndSubtree(ev.path);
       db_.removeSubtree(ev.path);
@@ -48,45 +55,88 @@ void Daemon::applyWatch(const WatchEvent& ev) {
   }
 }
 
-bool Daemon::doFullScan() {
+// 扫描阶段：不持维护锁，只读 cfg 快照，可被 cancel 协作打断（Spec 015 R2）。
+bool Daemon::scanAll(const Config& cfg, std::vector<FileEntry>& entries,
+                     const std::atomic<bool>* cancel, bool& aborted) {
+  aborted = false;
   scanFiles_ = 0;
   scanDirs_ = 0;
-  std::vector<FileEntry> entries;
-  fullScan(cfg_, entries, [this](const ScanStats& s) {
+  fullScan(cfg, entries, [this](const ScanStats& s) {
     scanFiles_ = s.files.load();
     scanDirs_ = s.dirs.load();
     fprintf(stderr, "[lsearchd] scanning: files=%llu dirs=%llu errors=%llu\n",
             static_cast<unsigned long long>(s.files.load()),
             static_cast<unsigned long long>(s.dirs.load()),
             static_cast<unsigned long long>(s.errors.load()));
-  });
+  }, cancel);
+  if (cancel != nullptr && cancel->load(std::memory_order_relaxed)) {
+    aborted = true;
+    return false;
+  }
+  return true;
+}
+
+// 发布阶段：DB 替换 + 内存索引重建。调用方须按 daemon.h 的锁序持锁。
+bool Daemon::commitScan(const Config& cfg, std::vector<FileEntry>&& entries,
+                        const std::atomic<bool>* cancel, bool& aborted) {
+  aborted = false;
 
   // 防御：根路径非空却扫到 0 条，视为异常，绝不能拿空索引覆盖现有好数据
   bool rootsEmpty = true;
-  for (const auto& r : cfg_.paths)
-    if (!cfg_.isExcluded(r)) { rootsEmpty = false; break; }
+  for (const auto& r : cfg.paths)
+    if (!cfg.isExcluded(r)) { rootsEmpty = false; break; }
   if (!rootsEmpty && entries.empty()) {
     fprintf(stderr, "[lsearchd] 全量扫描返回 0 条（根路径非空）—— 保留现有索引，跳过本次覆盖\n");
     return false;
   }
 
-  db_.clearFiles();
-  db_.begin();
-  for (auto& e : entries) db_.upsert(e);
-  db_.commit();
+  size_t n = 0;
+  {
+    std::lock_guard<std::mutex> dl(dbM_);
+    db_.begin();
+    db_.clearFiles();
+    size_t i = 0;
+    for (auto& e : entries) {
+      // 发布中途被管理命令打断：回滚，保持 DB 为发布前的一致状态。
+      if (cancel != nullptr && (i++ % 256) == 0 &&
+          cancel->load(std::memory_order_relaxed)) {
+        aborted = true;
+        db_.rollback();
+        return false;
+      }
+      db_.upsert(e);
+    }
+    db_.commit();
+  }
   {
     std::unique_lock<std::shared_mutex> lk(idxLock_);
     idx_.build(std::move(entries));
+    n = idx_.size();
   }
-  db_.setMeta("last_scan", std::to_string(nowSeconds()));
-  db_.setMeta("entries", std::to_string(idx_.size()));
-  fprintf(stderr, "[lsearchd] scan done: %zu entries\n", idx_.size());
+  {
+    std::lock_guard<std::mutex> dl(dbM_);
+    db_.setMeta("last_scan", std::to_string(nowSeconds()));
+    db_.setMeta("entries", std::to_string(n));
+  }
+  fprintf(stderr, "[lsearchd] scan done: %zu entries\n", n);
   return true;
+}
+
+bool Daemon::doFullScan() {
+  bool aborted = false;
+  std::vector<FileEntry> entries;
+  if (!scanAll(cfg_, entries, nullptr, aborted)) return false;
+  return commitScan(cfg_, std::move(entries), nullptr, aborted);
 }
 
 bool Daemon::loadIndexFromDb() {
   std::vector<FileEntry> entries;
-  if (!db_.loadAll(entries) || entries.empty()) return false;
+  bool ok;
+  {
+    std::lock_guard<std::mutex> dl(dbM_);
+    ok = db_.loadAll(entries);
+  }
+  if (!ok || entries.empty()) return false;
   std::unique_lock<std::shared_mutex> lk(idxLock_);
   idx_.build(std::move(entries));
   return idx_.size() > 0;
@@ -103,7 +153,8 @@ bool Daemon::init(std::string& err) {
   return true;
 }
 
-void Daemon::restartWatcher() {
+// 调用方须持有 maintM_（见 restartWatcher 包装）。
+void Daemon::restartWatcherLocked() {
   watcher_.stop();
   std::vector<std::string> dirs;
   {
@@ -118,19 +169,68 @@ void Daemon::restartWatcher() {
   }
 }
 
+void Daemon::restartWatcher() {
+  std::lock_guard<std::mutex> ml(maintM_);
+  restartWatcherLocked();
+}
+
 void Daemon::rebuildAsync() {
-  watcher_.stop();
-  doFullScan();
-  restartWatcher();
-  std::lock_guard<std::mutex> lk(rebuildM_);
-  rebuilding_ = false;
+  // 阶段一：持 maintM_ 停 watcher 并取 cfg 快照；随后无锁长扫描，
+  // 保证管理命令/搜索不被整段扫描阻塞（Spec 015 R2）。
+  Config snap;
+  {
+    std::lock_guard<std::mutex> ml(maintM_);
+    watcher_.stop();
+    snap = cfg_;
+  }
+
+  bool aborted = false;
+  std::vector<FileEntry> entries;
+  bool scanned = scanAll(snap, entries, &rebuildCancel_, aborted);
+
+  // 阶段二：未被取消才发布（DB/索引）并恢复 watcher；被取消则由管理命令负责收尾。
+  // 发布只依赖 dbM_/idxLock_（此时 watcher 仍停着，无 applyWatch），故不持 maintM_，
+  // 使 get-config/stats 等只读命令在发布期间仍可响应（Spec 015 R2）。
+  if (scanned) {
+    if (!rebuildCancel_.load(std::memory_order_relaxed)) {
+      bool ab2 = false;
+      commitScan(snap, std::move(entries), &rebuildCancel_, ab2);
+    }
+    std::lock_guard<std::mutex> ml(maintM_);
+    if (!rebuildCancel_.load(std::memory_order_relaxed)) restartWatcherLocked();
+  }
+  finishRebuild();
+}
+
+void Daemon::finishRebuild() {
+  {
+    std::lock_guard<std::mutex> lk(rebuildM_);
+    rebuilding_.store(false, std::memory_order_relaxed);
+  }
+  rebuildCv_.notify_all();
 }
 
 void Daemon::startRebuild() {
   std::lock_guard<std::mutex> lk(rebuildM_);
-  if (rebuilding_) return;
-  rebuilding_ = true;
-  std::thread([this] { rebuildAsync(); }).detach();
+  if (rebuilding_.load(std::memory_order_relaxed)) return;
+  if (rebuildThread_.joinable()) rebuildThread_.join();  // 回收上一轮已结束线程
+  rebuildCancel_.store(false, std::memory_order_relaxed);
+  rebuilding_.store(true, std::memory_order_relaxed);
+  rebuildThread_ = std::thread([this] { rebuildAsync(); });
+}
+
+// 打断在飞重建并等待其结束（协作取消 + join）。管理命令在改动 cfg/索引/DB 之前
+// 必须先调用，既保证新配置被下一轮重建采纳，也避免旧扫描发布过期结果。
+bool Daemon::cancelAndWaitRebuild() {
+  std::unique_lock<std::mutex> lk(rebuildM_);
+  if (!rebuilding_.load(std::memory_order_relaxed)) {
+    if (rebuildThread_.joinable()) rebuildThread_.join();
+    return false;
+  }
+  rebuildCancel_.store(true, std::memory_order_relaxed);
+  rebuildCv_.wait(lk, [this] { return !rebuilding_.load(std::memory_order_relaxed); });
+  if (rebuildThread_.joinable()) rebuildThread_.join();
+  return true;
 }
 
 namespace {
@@ -345,9 +445,12 @@ void Daemon::handleRequest(const std::string& line, std::string& out) {
     out += "size=" + std::to_string(bytes) + "\n";
     out += "uptime=" + std::to_string(nowSeconds() - startedAt_) + "\n";
     std::string roots;
-    for (const auto& r : cfg_.paths) {
-      if (!roots.empty()) roots += ",";
-      roots += r;
+    {
+      std::lock_guard<std::mutex> ml(maintM_);
+      for (const auto& r : cfg_.paths) {
+        if (!roots.empty()) roots += ",";
+        roots += r;
+      }
     }
     out += "roots=" + roots + "\n";
     out += "rebuilding=" + std::string(rebuilding_ ? "1" : "0") + "\n";
@@ -365,6 +468,7 @@ void Daemon::handleRequest(const std::string& line, std::string& out) {
   } else if (cmd == "capabilities") {
     out = std::string("OK\ncommands=") + kSupportedCommands + "\nEND\n";
   } else if (cmd == "rebuild") {
+    cancelAndWaitRebuild();
     startRebuild();
     out = "OK\n";
   } else if (cmd == "add-path") {
@@ -372,12 +476,16 @@ void Daemon::handleRequest(const std::string& line, std::string& out) {
     if (!validConfigPath(arg, why)) {
       out = "ERR bad path\n";
     } else {
-      bool has = false;
-      for (const auto& p : cfg_.paths)
-        if (p == arg) { has = true; break; }
-      if (!has) {
-        cfg_.paths.push_back(arg);
-        cfg_.save(cfg_.config_file);
+      cancelAndWaitRebuild();
+      {
+        std::lock_guard<std::mutex> ml(maintM_);
+        bool has = false;
+        for (const auto& p : cfg_.paths)
+          if (p == arg) { has = true; break; }
+        if (!has) {
+          cfg_.paths.push_back(arg);
+          cfg_.save(cfg_.config_file);
+        }
       }
       startRebuild();
       out = "OK\n";
@@ -387,17 +495,23 @@ void Daemon::handleRequest(const std::string& line, std::string& out) {
     if (arg.empty()) {
       out = "ERR bad path\n";
     } else {
-      cfg_.paths.erase(std::remove(cfg_.paths.begin(), cfg_.paths.end(), arg), cfg_.paths.end());
+      cancelAndWaitRebuild();
       {
-        std::unique_lock<std::shared_mutex> lk(idxLock_);
-        idx_.removePathAndSubtree(arg);
-        db_.removeSubtree(arg);
+        std::lock_guard<std::mutex> ml(maintM_);
+        cfg_.paths.erase(std::remove(cfg_.paths.begin(), cfg_.paths.end(), arg), cfg_.paths.end());
+        {
+          std::lock_guard<std::mutex> dl(dbM_);
+          std::unique_lock<std::shared_mutex> lk(idxLock_);
+          idx_.removePathAndSubtree(arg);
+          db_.removeSubtree(arg);
+        }
+        restartWatcherLocked();
+        cfg_.save(cfg_.config_file);
       }
-      restartWatcher();
-      cfg_.save(cfg_.config_file);
       out = "OK\n";
     }
   } else if (cmd == "get-config") {
+    std::lock_guard<std::mutex> ml(maintM_);
     out = "OK\n";
     out += "paths=" + joinList(cfg_.paths, ",") + "\n";
     out += "excludes=" + joinList(cfg_.excludes, ",") + "\n";
@@ -418,8 +532,12 @@ void Daemon::handleRequest(const std::string& line, std::string& out) {
       if (!ok) {
         out = "ERR bad path\n";
       } else {
-        cfg_.paths = std::move(v);
-        cfg_.save(cfg_.config_file);
+        cancelAndWaitRebuild();
+        {
+          std::lock_guard<std::mutex> ml(maintM_);
+          cfg_.paths = std::move(v);
+          cfg_.save(cfg_.config_file);
+        }
         startRebuild();
         out = "OK\n";
       }
@@ -427,8 +545,12 @@ void Daemon::handleRequest(const std::string& line, std::string& out) {
   } else if (cmd == "set-excludes") {
     // 传 "_" 表示清空排除列表
     if (arg == "_") {
-      cfg_.excludes.clear();
-      cfg_.save(cfg_.config_file);
+      cancelAndWaitRebuild();
+      {
+        std::lock_guard<std::mutex> ml(maintM_);
+        cfg_.excludes.clear();
+        cfg_.save(cfg_.config_file);
+      }
       startRebuild();
       out = "OK\n";
     } else {
@@ -440,8 +562,12 @@ void Daemon::handleRequest(const std::string& line, std::string& out) {
       if (!ok) {
         out = "ERR bad path\n";
       } else {
-        cfg_.excludes = std::move(v);
-        cfg_.save(cfg_.config_file);
+        cancelAndWaitRebuild();
+        {
+          std::lock_guard<std::mutex> ml(maintM_);
+          cfg_.excludes = std::move(v);
+          cfg_.save(cfg_.config_file);
+        }
         startRebuild();
         out = "OK\n";
       }
@@ -450,9 +576,13 @@ void Daemon::handleRequest(const std::string& line, std::string& out) {
     // set-opts <hidden 0|1> <follow 0|1>
     auto v = split(arg, ' ');
     if (v.size() >= 2) {
-      cfg_.index_hidden = (v[0] == "1");
-      cfg_.follow_symlinks = (v[1] == "1");
-      cfg_.save(cfg_.config_file);
+      cancelAndWaitRebuild();
+      {
+        std::lock_guard<std::mutex> ml(maintM_);
+        cfg_.index_hidden = (v[0] == "1");
+        cfg_.follow_symlinks = (v[1] == "1");
+        cfg_.save(cfg_.config_file);
+      }
       startRebuild();
       out = "OK\n";
     } else {
@@ -580,7 +710,12 @@ bool Daemon::run(std::string& err) {
   for (auto& t : connThreads_)
     if (t.joinable()) t.join();
 
-  watcher_.stop();
+  // 回收在飞重建（协作取消 + join），确保没有 detached 线程越过 Daemon 生命周期。
+  cancelAndWaitRebuild();
+  {
+    std::lock_guard<std::mutex> ml(maintM_);
+    watcher_.stop();
+  }
   ::unlink(sock.c_str());
   return true;
 }

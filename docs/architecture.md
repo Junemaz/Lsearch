@@ -84,6 +84,24 @@ CLI/MCP → Client → socket → lsearchd serveConnection
 详见 [Spec 011](specs/011-test-hardening.md)（MCP：负形状矩阵 / 转录回放 / 外部验证脚本）与
 [Spec 012](specs/012-ipc-hardening.md)（IPC：`nc -U` / 独立客户端差分 / 帧完整性 `search3`）。
 
+## 4.1 并发与锁序（Spec 015）
+
+管理命令（`add-path`/`remove-path`/`set-paths`/`set-excludes`/`set-opts`/`rebuild`）与全量重建、
+inotify 事件线程共享 watcher、`cfg_`、SQLite 单连接与内存索引，因此：
+
+- **锁序固定**（`daemon/daemon.h` 注释固化）：`rebuildM_ → maintM_ → dbM_ → idxLock_`；
+  `applyWatch`（事件线程）只取 `dbM_ → idxLock_`，**绝不取 `maintM_`**——否则
+  `restartWatcherLocked()` 持 `maintM_` 并 join 事件线程时会自锁。
+- **重建是可 join 线程 + 协作取消**：管理命令在改动 `cfg_`/索引/DB 前先
+  `cancelAndWaitRebuild()`；取消在扫描循环、`popClaim`（≤50 ms 超时轮询）与 `commitScan`
+  （每 256 条 upsert）处被观察，故等待有界，不会等完整段扫描。
+- **长扫描不持 `maintM_`**：发布阶段只在 `dbM_`/`idxLock_` 下进行，`get-config`/`stats`/
+  搜索在重建期间仍可响应。
+- **生命周期**：`run()` / `~Daemon` 均 `cancelAndWaitRebuild()` + `watcher_.stop()`，
+  daemon 中不存在 `.detach()` 线程越过 `Daemon` 生命周期。
+- **测试钩子**：`LSEARCH_SCAN_DELAY_US>0` 让每个目录扫描额外 sleep（默认未设置 = 0，
+  仅影响耗时、不影响结果），用于稳定复现/回归"重建 × 管理命令"竞态。
+
 ## 7. 开源参考
 - [Fsearch](https://github.com/cboxdoerfer/fsearch)：借鉴索引更新与索引数据结构（C/GTK3）。
 - [fd](https://github.com/sharkdp/fd) / [ripgrep](https://github.com/BurntSushi/ripgrep)：并行遍历、忽略规则技巧。
