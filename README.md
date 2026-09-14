@@ -80,6 +80,12 @@ legacy `_meta.progressToken` 与 `notifications/cancelled`）：
 ```
 重新采集：`LSEARCH_MCP_TRACE=/tmp/lsearch-mcp-real.jsonl scripts/mcp-trace-wrapper.sh`
 （把 opencode 的 MCP command 临时指向该 wrapper 跑一次会话；详见脚本头注释）。
+IPC 协议加固（Spec 012；第三方传输 + 独立客户端差分 + 帧完整性；含 `\n`/`\t` 文件名）：
+```bash
+./scripts/self-test-ipc-external.sh -s  # 第三方 nc -U 直连原始协议（7 项）
+./scripts/self-test-ipc-diff.sh -s      # 独立客户端 × CLI 逐字节差分（13 项）
+./scripts/self-test-ipc-matrix.sh -s    # 负形状/边界矩阵（33 项，含帧完整性用例）
+```
 TUI 自动化自测（tmux 伪终端注入按键并断言画面；需装 tmux）：
 ```bash
 ./scripts/self-test-tui.sh      # 输入即搜 / 通配符 / F5 重建 / Esc 清空 / Ctrl+Q 退出

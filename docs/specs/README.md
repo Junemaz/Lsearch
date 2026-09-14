@@ -29,7 +29,7 @@
 | [009-dbus](009-dbus.md) | V3：D-Bus 集成（桌面门面 + 按需激活） | **Done** | `lsearch_tests` 481、`self-test-dbus.sh` 22/22 |
 | [010-search-protocol](010-search-protocol.md) | 检索协议 v2：真 total/truncated + 路径子树过滤 | **Done** | `lsearch_tests` 481、`self-test-ipc.sh` 18/18、性能证据 |
 | [011-test-hardening](011-test-hardening.md) | 协议测试加固（外部验证器 + 转录回放 + 负形状矩阵） | **Done** | conformance `server` PASS（基线内预期）、Inspector 3/3、replay 6/6（合成 + 真实 opencode 转录）、matrix 27/27 |
-| [012-ipc-hardening](012-ipc-hardening.md) | IPC 协议加固（外部验证 + 帧完整性修复） | **Proposed** | 立项探针实录：文件名含 `\n`/`\t` 破坏结果帧（伪造 `END`/字段错位） |
+| [012-ipc-hardening](012-ipc-hardening.md) | IPC 协议加固（外部验证 + 帧完整性修复） | **Done** | `nc -U` 第三方 7/7、独立客户端×CLI 逐字节差分 13/13、负形状矩阵 33/33；`search3` 转义修复 `\n`/`\t` 帧破坏；`lsearch_tests` 511 |
 
 如何核对：每张规格的 `## Scenario` 是"用户可复现的验收场景"，`## Evidence` 给出
 "我如何证明它成立"（单测名 + 命令）。

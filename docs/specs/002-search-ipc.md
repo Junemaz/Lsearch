@@ -28,9 +28,18 @@ glob 匹配（`*` 任意序列、`?` 单字符，均大小写不敏感）。
 空查询返回空结果（不返回全部）。
 
 #### Requirement 5 — IPC 明文协议
-`ping / version / stats / search <limit> <dirs> <files> <sort> <query> / rebuild /
-add-path / remove-path / shutdown`；响应 `OK/ERR` + `END` 结构；socket chmod 0600。
-（追加式扩展见 [Spec 010](010-search-protocol.md)：`search2`/`count2`/`capabilities`，响应格式不变。）
+命令全集：`ping / version / stats / search / search2 / search3 / count2 / capabilities /
+rebuild / add-path / remove-path / shutdown / get-config / set-paths / set-excludes /
+set-opts`。**并非所有响应都带 `END`**：
+- 多行响应（`OK` 头 + 负载 + `END`）：`version`、`stats`、`search`、`search2`、`search3`、
+  `capabilities`、`get-config`；
+- 单行响应（仅 `OK` / `ERR`，**无 `END`**）：`ping`、`count2`、`rebuild`、`add-path`、
+  `remove-path`、`shutdown`、`set-paths`、`set-excludes`、`set-opts`。
+
+socket chmod 0600，socket 目录 `mkdir 0700`，单例锁文件 `<sock>.lock`（flock，0600，
+随进程退出释放）。单行请求上限 1 MiB，超限返回 `ERR line too long` 并关闭该连接。
+（追加式扩展见 [Spec 010](010-search-protocol.md)：`search2`/`count2`/`capabilities`；
+帧完整性 `search3` + 行上限见 [Spec 012](012-ipc-hardening.md)。）
 
 #### Requirement 6 — 守护进程自动拉起
 CLI/TUI 连不上 socket 时自动 `lsearchd`（默认开启，`-m` 关闭）。
