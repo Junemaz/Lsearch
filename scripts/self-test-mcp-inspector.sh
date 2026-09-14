@@ -53,6 +53,13 @@ fi
 echo "==> 1/ 环境探针（npx / node / inspector）"
 command -v npx >/dev/null 2>&1 || skip "未找到 npx"
 command -v node >/dev/null 2>&1 || skip "未找到 node"
+# 官方 Inspector 的 engines 为 node >= 22.19.0；低版本 npm 仍会装上，但 CLI 会产出
+# 空结果（rc=0），表现为「本地通过、CI 失败」。此处提前 SKIP 并说明，避免假 FAIL。
+NODE_MAJOR=$(node --version 2>/dev/null | sed -n 's/^v\([0-9]*\)\..*/\1/p')
+NODE_MINOR=$(node --version 2>/dev/null | sed -n 's/^v[0-9]*\.\([0-9]*\).*/\1/p')
+if [ -z "$NODE_MAJOR" ] || [ "$NODE_MAJOR" -lt 22 ] || { [ "$NODE_MAJOR" -eq 22 ] && [ "$NODE_MINOR" -lt 19 ]; }; then
+  skip "需要 Node >= 22.19（当前 $(node --version 2>/dev/null)）：@modelcontextprotocol/inspector 的 engines 约束"
+fi
 command -v python3 >/dev/null 2>&1 || skip "未找到 python3"
 if ! timeout 300 npx --prefer-offline -y --package @modelcontextprotocol/inspector sh -c 'command -v mcp-inspector' >/dev/null 2>&1; then
   skip "无法解析 @modelcontextprotocol/inspector（npx 缓存缺失且无网络）"

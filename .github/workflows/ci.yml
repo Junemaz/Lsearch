@@ -93,9 +93,11 @@ jobs:
             build-essential cmake libsqlite3-dev libdbus-1-dev libncurses-dev \
             qtbase5-dev python3
 
+      # Node >= 22.19 是外部套件的硬要求：@modelcontextprotocol/inspector 的
+      # engines 为 node >= 22.19.0（低版本下 npm 仍会装上，但 CLI 运行产出空结果）。
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
 
       - name: 配置（Release）
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
