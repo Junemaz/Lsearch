@@ -99,35 +99,40 @@ if(BUILD_TUI)
   endif()
 endif()
 
-# ---- third_party: Yet-Zio/FramelessWindow（无边框窗口库）----
-# 已本地化并打补丁：Qt5 兼容（position()→pos()/globalPos()）+ 浅色 CSS
-add_library(framelesswindow STATIC
-  third_party/FramelessWindow/src/framelesswindow.cpp
-  third_party/FramelessWindow/src/FramelessWindow.ui
-  third_party/FramelessWindow/src/framelesswindow.qrc
-)
-target_include_directories(framelesswindow PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/FramelessWindow/src)
-target_link_libraries(framelesswindow PUBLIC Qt5::Widgets)
-set_target_properties(framelesswindow PROPERTIES
-  AUTOMOC ON AUTOUIC ON AUTORCC ON
-  CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
-
 # ---- gui (Qt5) ----
+# framelesswindow 与 lsearch-gui 都链接 Qt5::Widgets，故二者仅在
+# BUILD_GUI=ON 且 Qt5 Widgets 实际找到时才创建；这样 -DBUILD_GUI=OFF
+# （或无 Qt5 的纯 CLI/TUI 环境）也能正常 configure，不会被
+# framelesswindow 的无条件 Qt5::Widgets 链接拖垮。
 option(BUILD_GUI "Build the Qt5 GUI" ON)
 if(BUILD_GUI)
   find_package(Qt5 COMPONENTS Widgets QUIET)
-  if(Qt5Widgets_FOUND)
-    add_executable(lsearch-gui gui/main.cpp)
-    target_include_directories(lsearch-gui PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-    target_link_libraries(lsearch-gui PRIVATE lsearch_core lsearch_ipc Qt5::Widgets framelesswindow)
-    set_target_properties(lsearch-gui PROPERTIES
-      AUTOMOC ON
-      CXX_STANDARD 17
-      CXX_STANDARD_REQUIRED ON)
-    install(TARGETS lsearch-gui RUNTIME DESTINATION bin)
-  else()
-    message(WARNING "Qt5 Widgets 未找到，跳过 GUI 构建（apt install qtbase5-dev）")
-  endif()
+endif()
+if(BUILD_GUI AND NOT Qt5Widgets_FOUND)
+  message(WARNING "Qt5 Widgets 未找到，跳过 GUI 构建（apt install qtbase5-dev）")
+endif()
+if(BUILD_GUI AND Qt5Widgets_FOUND)
+  # ---- third_party: Yet-Zio/FramelessWindow（无边框窗口库）----
+  # 已本地化并打补丁：Qt5 兼容（position()→pos()/globalPos()）+ 浅色 CSS
+  add_library(framelesswindow STATIC
+    third_party/FramelessWindow/src/framelesswindow.cpp
+    third_party/FramelessWindow/src/FramelessWindow.ui
+    third_party/FramelessWindow/src/framelesswindow.qrc
+  )
+  target_include_directories(framelesswindow PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/FramelessWindow/src)
+  target_link_libraries(framelesswindow PUBLIC Qt5::Widgets)
+  set_target_properties(framelesswindow PROPERTIES
+    AUTOMOC ON AUTOUIC ON AUTORCC ON
+    CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+
+  add_executable(lsearch-gui gui/main.cpp)
+  target_include_directories(lsearch-gui PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  target_link_libraries(lsearch-gui PRIVATE lsearch_core lsearch_ipc Qt5::Widgets framelesswindow)
+  set_target_properties(lsearch-gui PROPERTIES
+    AUTOMOC ON
+    CXX_STANDARD 17
+    CXX_STANDARD_REQUIRED ON)
+  install(TARGETS lsearch-gui RUNTIME DESTINATION bin)
 endif()
 
 # ---- tests ----
