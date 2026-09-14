@@ -130,7 +130,7 @@ IPC 协议加固（Spec 012；第三方传输 + 独立客户端差分 + 帧完�
 ```bash
 ./scripts/self-test-ipc-external.sh -s  # 第三方 nc -U 直连原始协议（7 项）
 ./scripts/self-test-ipc-diff.sh -s      # 独立客户端 × CLI 逐字节差分（13 项）
-./scripts/self-test-ipc-matrix.sh -s    # 负形状/边界矩阵（61 项：帧完整性 + Spec 013 输入校验）
+./scripts/self-test-ipc-matrix.sh -s    # 负形状/边界矩阵（78 项：帧完整性 + 输入校验 + watcher 增量正确性）
 ```
 TUI 自动化自测（tmux 伪终端注入按键并断言画面；需装 tmux）：
 ```bash
@@ -141,8 +141,8 @@ TUI 自动化自测（tmux 伪终端注入按键并断言画面；需装 tmux）
 ```ini
 # ~/.config/lsearch/lsearch.conf
 paths = /home/user, /data        # 索引根路径，逗号分隔；默认仅用户家目录
-excludes = /proc,/sys,/dev,/run  # 排除前缀
-index_hidden = 0                 # 是否索引隐藏文件
+excludes = /proc,/sys,/dev,/run  # 排除前缀（默认另含 ~/.cache、~/.git、回收站）
+index_hidden = 1                 # 是否索引隐藏文件/目录（默认 1）
 follow_symlinks = 0              # 是否跟随符号链接
 ```
 管理命令：`lsearchd --add-path /data`、`lsearchd --remove-path /data`、

@@ -1,6 +1,6 @@
 # Lsearch Spec 016 — watcher 增量正确性（隐藏过滤 / 重命名 / 统计溢出）
 
-Status: **Proposed**
+Status: **Done**
 
 ## Why
 用户报告的"隐藏文件增量不一致"经隔离环境复现，牵出**四个真实缺陷**（`index_hidden=0` 默认下实测）：
@@ -75,13 +75,13 @@ When 查询 `stats.size`
 Then 为真实字节和（不出现 2^63 量级）
 
 ## Task
-- [ ] 统一"是否索引该名字"判定并接入全部事件路径
-- [ ] 修复 `IN_MOVED_TO`/`IN_MOVED_FROM` 语义（含事件掩码顺序）
-- [ ] 修复 `totalBytes()` 溢出（+ 单测）
-- [ ] 修正 `Watcher::start()` 隐藏条件
-- [ ] `index_hidden` 默认改 1 + 默认排除 `.git`/`.cache`/`~/.local/share/Trash`（文档同步）
-- [ ] 回归用例（隐藏各路径 / mv 原子保存 / 大 size / 默认值两方向）
-- [ ] 全量复跑；文档同步；Evidence → Done
+- [x] 统一"是否索引该名字"判定并接入全部事件路径
+- [x] 修复 `IN_MOVED_TO`/`IN_MOVED_FROM` 语义（含事件掩码顺序）
+- [x] 修复 `totalBytes()` 溢出（+ 单测）
+- [x] 修正 `Watcher::start()` 隐藏条件
+- [x] `index_hidden` 默认改 1 + 默认排除 `$HOME/.git`（`.cache`/回收站原有）
+- [x] 回归用例（隐藏各路径 / mv 原子保存 / 大 size / 默认值两方向）
+- [x] 全量复跑；文档同步；Evidence → Done
 
 ## 依赖与顺序
 本规格与 [Spec 015](015-daemon-concurrency.md) 同触 `daemon/`+`core/watcher.*`，须**在其后**开工；
@@ -92,7 +92,60 @@ Then 为真实字节和（不出现 2^63 量级）
 `core/watcher.cpp`/`core/watcher.h`、`core/search.*`（`totalBytes`）、`tests/`、`scripts/`（用例）、文档
 
 ## Evidence
-（待实现后填充）
+
+### 根因（4 类，其中 F2 比预期严重）
+- **F1 事件分支不一致**：`loop()` 的 `IN_MODIFY|IN_ATTRIB` 分支没有隐藏过滤，而
+  `IN_CREATE|IN_MOVED_TO` 有；inotify 是否把 create+modify 合并为一个事件决定走哪条分支 ⇒
+  同一操作**时而被过滤、时而被索引**（子目录隐藏文件实测 `count=1`）。
+- **F2 重命名/原子保存失效（三因）**：
+  1. `collectDirs()` 只产出"根之下的条目"，**索引根本身从未被 watch** ⇒ 根目录下的
+     新建/重命名收不到事件；
+  2. `Watcher::stop()` 不清 `wdToPath_`/`pathToWd_`，而 `start()` 依赖 `pathToWd_` 去重 ⇒
+     **每次重建/watcher 重启后新 fd 上零 watch，增量监控静默失效**（隐性最严重）；
+  3. `loop()` 用 `else if` 链，同一事件掩码多位互相吞掉（`IN_MOVED_TO` 因此不生效）。
+- **F3 `stats.size` 溢出**：`Index::add()` 的"原地更新"分支**只减旧值、漏加新值** ⇒ `bytes_`
+  反向回绕到 2^63。实测 DB 侧总和仅 **27.9 GB**、最大条目 **1 GB**，证明并非文件过大；
+  另加饱和加减与 `sanitizeSize`（负数 / >1 PiB → 0）。
+- **F4**：`Watcher::start()` 的隐藏目录条件写反（`index_hidden=1` 时反而跳过隐藏目录）。
+
+### 修复
+- **单一判定**：`Config::shouldIndexName` / `shouldIndexPath`（excludes + 隐藏），接入
+  `loop()`（create / moved_to / modify / attrib）、`scanNewDir()`、`start()` 与
+  `core/indexer.cpp` 的初始扫描 —— 两条路径不可能再分叉。
+- `loop()` 改为**按位独立处理**：先移除（`IN_DELETE` 恒删；`IN_MOVED_FROM` 仅当该路径确实
+  不再存在时才删，避免误删同名新条目）后新增/修改，使 rename 终态确定、不受事件合并影响。
+- `Watcher::stop()` 清空 wd 映射；`restartWatcherLocked()` 显式把 `cfg_.paths` 并入 watch 列表。
+- `Index`：更新分支补加新值；`satAddBytes`/`satSubBytes` 饱和算术；`sanitizeSize`。
+- **默认值变更**：`index_hidden = true`；默认 excludes 增加 `$HOME/.git`（保留 `.cache`、
+  `~/.local/share/Trash`）。
+
+### 验收（我方独立探针：隔离 `HOME/XDG_*` + `build/lsearch --count`）
+```
+Phase A 默认（index_hidden=1）：
+  PASS 子目录隐藏文件被索引 (=1)              PASS 隐藏目录内容被索引 (=1)
+  PASS mv 原子保存可见名被索引 (=1)           PASS stats.size 未溢出 (=12.0 KB)
+  PASS 重建后 HOME 根新建文件被索引 (=1)      PASS 重建后子目录新建文件被索引 (=1)
+  PASS 重建后新建隐藏文件被索引 (=1)
+Phase B index_hidden=0：
+  PASS 子目录隐藏文件被过滤 (=0)              PASS mv 到隐藏名被过滤 (=0)
+  PASS mv 到可见名被索引 (=1)                 PASS 隐藏目录内容被过滤 (=0)
+RESULT: pass=11 fail=0
+```
+
+### 回归
+```
+cmake --build build            clean（无新告警）
+lsearch_tests                  574 checks / 0 failures（+22：溢出/饱和/更新分支）
+self-test / ipc / mcp / dbus   25 / 18 / 37 / 22
+ipc-external / ipc-diff        7 / 13
+ipc-matrix                     78/78（+17：隐藏各事件路径 / mv 原子保存 / 默认值两方向）
+运行前后 pgrep -x lsearchd     仅真实守护进程 455627
+```
+
+### 依赖与顺序
+本规格叠在 [Spec 015](015-daemon-concurrency.md) 修复之上（同触 `core/watcher.*` + `daemon/`）；
+其 PR 以 015 分支为 base，015 合并后自动改基到 `main`。
+[Spec 017](017-index-memory.md)（内存精简 / `hot_index` 开关）依赖本规格的默认值变更。
 
 ### 复现证据（立项依据，隔离环境 + `nc -U`/CLI）
 ```

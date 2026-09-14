@@ -12,6 +12,14 @@ static std::string toLow(const std::string& s) { return lsearch::toLowerAscii(s)
 
 namespace {
 
+// 饱和算术：任何统计累加都应"封顶不回绕"，避免单条异常 size 或状态漂移
+// 把 totalBytes() 变成 2^63 量级的假值（Spec 016 F3）。
+uint64_t satAddBytes(uint64_t acc, uint64_t v) {
+  uint64_t s = acc + v;
+  return s < acc ? UINT64_MAX : s;
+}
+uint64_t satSubBytes(uint64_t acc, uint64_t v) { return acc > v ? acc - v : 0; }
+
 // 与 Index::search 共用的正则编译路径：ECMAScript + 大小写不敏感。
 // pattern 必须保持原始大小写，小写化会改变 \D/\W/\S 等转义语义。
 bool compileRegex(const std::string& pattern, std::regex& out, std::string& err) {
@@ -92,10 +100,11 @@ void Index::build(std::vector<FileEntry>&& in) {
   for (auto& fe : in) {
     Entry en;
     en.e = std::move(fe);
+    en.e.size = sanitizeSize(en.e.size);
     en.name_low = toLow(en.e.name);
     en.path_low = toLow(en.e.path);
     if (en.e.is_dir) ++dirs_;
-    bytes_ += static_cast<uint64_t>(en.e.size);
+    bytes_.store(satAddBytes(bytes_.load(), static_cast<uint64_t>(en.e.size)));
     pathIndex_.emplace(en.e.path, entries_.size());
     entries_.push_back(std::move(en));
   }
@@ -104,18 +113,20 @@ void Index::build(std::vector<FileEntry>&& in) {
 void Index::add(const FileEntry& e) {
   Entry en;
   en.e = e;
+  en.e.size = sanitizeSize(en.e.size);
   en.name_low = toLow(e.name);
   en.path_low = toLow(e.path);
   auto it = pathIndex_.find(e.path);
   if (it != pathIndex_.end()) {
-    // 已存在：原地更新
+    // 已存在：原地更新。注意必须先减旧值、再加新值，漏加会导致 bytes_ 单调下溢。
     Entry& old = entries_[it->second];
     if (old.e.is_dir) --dirs_;
-    bytes_ -= static_cast<uint64_t>(old.e.size);
+    bytes_.store(satSubBytes(bytes_.load(), static_cast<uint64_t>(old.e.size)));
     old = std::move(en);
+    bytes_.store(satAddBytes(bytes_.load(), static_cast<uint64_t>(old.e.size)));
   } else {
     if (e.is_dir) ++dirs_;
-    bytes_ += static_cast<uint64_t>(e.size);
+    bytes_.store(satAddBytes(bytes_.load(), static_cast<uint64_t>(en.e.size)));
     pathIndex_.emplace(e.path, entries_.size());
     entries_.push_back(std::move(en));
   }
@@ -127,7 +138,7 @@ bool Index::remove(const std::string& path) {
   size_t idx = it->second;
   const Entry& e = entries_[idx];
   if (e.e.is_dir) --dirs_;
-  if (e.e.size > 0) bytes_ -= static_cast<uint64_t>(e.e.size);
+  bytes_.store(satSubBytes(bytes_.load(), static_cast<uint64_t>(e.e.size)));
   // 用末尾元素覆盖，保持 O(1)
   if (idx + 1 < entries_.size()) {
     const std::string movedPath = entries_.back().e.path;
@@ -157,7 +168,7 @@ size_t Index::removePathAndSubtree(const std::string& path) {
     if (en.e.path == path || startsWith(en.e.path, prefix)) {
       mark[i] = true;
       if (en.e.is_dir) --dirs_;
-      bytes_ -= static_cast<uint64_t>(en.e.size);
+      bytes_.store(satSubBytes(bytes_.load(), static_cast<uint64_t>(en.e.size)));
       ++removed;
     }
   }

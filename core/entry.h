@@ -20,6 +20,14 @@ enum class SortKey { Name, Path, Size, Mtime };
 const char* sortKeyName(SortKey k);
 bool sortKeyFromName(const std::string& s, SortKey& out);
 
+// st_size 合理性上限（Spec 016 F3）：搜索索引里不可能出现 >1 PiB 的条目。
+// 伪文件/稀疏文件/损坏 stat 可能报出接近 INT64_MAX 的值，统一按 0 处理，
+// 避免 totalBytes() 累加溢出并污染按大小排序。
+inline constexpr int64_t kMaxPlausibleFileSize = 1LL << 50;  // 1 PiB
+inline int64_t sanitizeSize(int64_t s) {
+  return (s < 0 || s > kMaxPlausibleFileSize) ? 0 : s;
+}
+
 struct SearchResult {
   FileEntry entry;
   bool path_matched = false;  // true 表示命中的是完整路径而非文件名

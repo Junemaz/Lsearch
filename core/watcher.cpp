@@ -16,6 +16,11 @@
 
 namespace lsearch {
 
+static bool pathExists(const std::string& path) {
+  struct stat st;
+  return lstat(path.c_str(), &st) == 0;
+}
+
 Watcher::~Watcher() { stop(); }
 
 bool Watcher::addWatch(const std::string& path) {
@@ -67,7 +72,7 @@ void Watcher::emitRemoved(const std::string& path) {
 }
 
 void Watcher::scanNewDir(const std::string& path) {
-  if (cfg_.isExcluded(path)) return;
+  if (!cfg_.shouldIndexPath(path)) return;
   if (!addWatch(path)) return;
   DIR* dp = opendir(path.c_str());
   if (!dp) return;
@@ -75,8 +80,9 @@ void Watcher::scanNewDir(const std::string& path) {
   struct dirent* de;
   while ((de = readdir(dp)) != nullptr) {
     if (strcmp(de->d_name, ".") == 0 || strcmp(de->d_name, "..") == 0) continue;
-    if (!cfg_.index_hidden && cfg_.isHiddenName(de->d_name)) continue;
-    children.push_back(joinPath(path, de->d_name));
+    std::string child = joinPath(path, de->d_name);
+    if (!cfg_.shouldIndexPath(child)) continue;
+    children.push_back(child);
   }
   closedir(dp);
   for (auto& c : children) emitAdded(c);
@@ -116,13 +122,19 @@ void Watcher::loop() {
         emitRemoved(full.empty() ? dir : full);
         continue;
       }
-      if (mask & (IN_CREATE | IN_MOVED_TO)) {
-        if (!cfg_.index_hidden && cfg_.isHiddenName(name)) continue;
+      // 同一事件的多个掩码位必须各自生效（不能用 else-if 链互相吞掉）：
+      // 先处理移除（IN_DELETE / IN_MOVED_FROM），再处理新增（IN_CREATE / IN_MOVED_TO）与修改。
+      // 顺序固定为"先删旧、后加新"，使 rename 的最终状态确定，不受事件合并影响。
+      if (mask & (IN_DELETE | IN_MOVED_FROM)) {
+        // IN_MOVED_FROM 未必意味着路径已消失（旧名可能立即被新条目复用）：
+        // 仅当该路径确实不存在时才移除，避免误删新条目。
+        if ((mask & IN_DELETE) || !pathExists(full)) emitRemoved(full);
+      }
+      if ((mask & (IN_CREATE | IN_MOVED_TO)) && cfg_.shouldIndexPath(full)) {
         emitAdded(full);
-      } else if (mask & (IN_DELETE | IN_MOVED_FROM)) {
-        emitRemoved(full);
-      } else if (mask & (IN_MODIFY | IN_ATTRIB)) {
-        // 仅对现存条目做更新
+      }
+      if ((mask & (IN_MODIFY | IN_ATTRIB)) && cfg_.shouldIndexPath(full)) {
+        // 仅对现存条目做更新（隐藏/排除项在此与 create 路径保持同一判定）
         WatchEvent w;
         struct stat st;
         int rc = cfg_.follow_symlinks ? stat(full.c_str(), &st) : lstat(full.c_str(), &st);
@@ -151,8 +163,7 @@ bool Watcher::start(const std::vector<std::string>& dirs, const Config& cfg, Cb 
     return false;
   }
   for (const auto& d : dirs) {
-    if (cfg_.isExcluded(d)) continue;
-    if (cfg_.index_hidden && cfg_.isHiddenName(baseName(d))) continue;
+    if (!cfg_.shouldIndexPath(d)) continue;
     addWatch(d);
   }
   stop_ = false;
@@ -170,6 +181,10 @@ void Watcher::stop() {
     close(fd_);
     fd_ = -1;
   }
+  // 必须清空映射：start() 依赖 pathToWd_ 去重，若停止后残留旧路径，
+  // 下一次 start() 的 addWatch 会因"已存在"直接返回，导致新 fd 上一个 watch 都没有。
+  wdToPath_.clear();
+  pathToWd_.clear();
 }
 
 }  // namespace lsearch

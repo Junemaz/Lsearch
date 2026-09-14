@@ -95,8 +95,7 @@ void fullScan(const Config& cfg, std::vector<FileEntry>& out, ScanProgress prog,
       if (canceled()) break;
       if (strcmp(de->d_name, ".") == 0 || strcmp(de->d_name, "..") == 0) continue;
       std::string child = joinPath(dir, de->d_name);
-      if (cfg.isExcluded(child)) continue;
-      if (!cfg.index_hidden && cfg.isHiddenName(de->d_name)) continue;
+      if (!cfg.shouldIndexPath(child)) continue;
 
       struct stat st;
       int rc = cfg.follow_symlinks ? stat(child.c_str(), &st) : lstat(child.c_str(), &st);

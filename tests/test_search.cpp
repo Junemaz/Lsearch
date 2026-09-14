@@ -424,6 +424,47 @@ TEST(count_ex_cap) {
   idx.setCandidateCapForTest(old);
 }
 
+TEST(index_total_bytes_no_overflow) {
+  std::vector<FileEntry> v;
+  v.push_back({"/a/big1", "big1", INT64_MAX, 1, false, 1});
+  v.push_back({"/a/big2", "big2", INT64_MAX - 5, 1, false, 2});
+  v.push_back({"/a/neg", "neg", -42, 1, false, 3});
+  v.push_back({"/a/normal", "normal", 100, 1, false, 4});
+  Index idx;
+  idx.build(std::move(v));
+  // 荒谬/负 size 归零，仅正常值计入；且总量远小于 2^63
+  CHECK_EQ(idx.totalBytes(), (uint64_t)100);
+}
+
+TEST(index_total_bytes_saturates) {
+  // 1<<50 * 2^14 == 2^64：无饱和时回绕为 0；饱和后应为 UINT64_MAX。
+  std::vector<FileEntry> v;
+  v.reserve(1u << 14);
+  for (int i = 0; i < (1 << 14); ++i)
+    v.push_back({"/a/f" + std::to_string(i), "f" + std::to_string(i),
+                 kMaxPlausibleFileSize, 1, false, static_cast<uint64_t>(i)});
+  Index idx;
+  idx.build(std::move(v));
+  CHECK_EQ(idx.totalBytes(), (uint64_t)UINT64_MAX);
+  CHECK(idx.totalBytes() != 0);
+}
+
+TEST(index_add_update_bytes_correct) {
+  FileEntry a{"/a/x", "x", 1000, 1, false, 1};
+  Index idx;
+  idx.build(std::vector<FileEntry>{a});
+  CHECK_EQ(idx.totalBytes(), (uint64_t)1000);
+  // 原地更新必须替换旧值（曾漏加新值 -> 单调下溢 -> stats.size 报 2^63）
+  idx.add({"/a/x", "x", 250, 2, false, 1});
+  CHECK_EQ(idx.size(), (size_t)1);
+  CHECK_EQ(idx.totalBytes(), (uint64_t)250);
+  for (int i = 0; i < 1000; ++i) idx.add({"/a/x", "x", 300, 3, false, 1});
+  CHECK_EQ(idx.totalBytes(), (uint64_t)300);
+  // 删除后归零，不得下溢
+  idx.remove("/a/x");
+  CHECK_EQ(idx.totalBytes(), (uint64_t)0);
+}
+
 TEST(base64_roundtrip_and_strict) {
   CHECK_EQ(base64Encode(""), std::string(""));
   CHECK_EQ(base64Encode("f"), std::string("Zg=="));

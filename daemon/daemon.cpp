@@ -161,6 +161,12 @@ void Daemon::restartWatcherLocked() {
     std::shared_lock<std::shared_mutex> lk(idxLock_);
     idx_.collectDirs(dirs);
   }
+  // 索引根本身不在 collectDirs()（全量扫描只产出根下的条目），必须显式监控，
+  // 否则根目录下的新建/删除/重命名（编辑器 temp→rename 保存）永远收不到事件（Spec 016 F2）。
+  for (const auto& r : cfg_.paths) {
+    if (cfg_.isExcluded(r)) continue;
+    if (std::find(dirs.begin(), dirs.end(), r) == dirs.end()) dirs.push_back(r);
+  }
   std::string werr;
   if (!watcher_.start(dirs, cfg_, [this](const WatchEvent& ev) { applyWatch(ev); }, werr)) {
     fprintf(stderr, "[lsearchd] inotify 启动失败（仍可手动搜索）: %s\n", werr.c_str());
