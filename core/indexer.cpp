@@ -7,6 +7,8 @@
 #include <unistd.h>
 
 #include <condition_variable>
+#include <chrono>
+#include <cstdlib>
 #include <cstring>
 #include <deque>
 #include <mutex>
@@ -15,8 +17,27 @@
 
 namespace lsearch {
 
-void fullScan(const Config& cfg, std::vector<FileEntry>& out, ScanProgress prog) {
+// 测试钩子（Spec 015）：LSEARCH_SCAN_DELAY_US>0 时，每处理完一个目录额外 sleep
+// 该微秒数，让重建在快机上可控地变慢，从而稳定复现/回归"重建 × 管理命令"竞态。
+// 只影响耗时，不影响扫描结果；进程内只读取一次。生产环境未设置 = 0，无行为变化。
+static unsigned long scanDelayUs() {
+  static const unsigned long v = [] {
+    const char* s = getenv("LSEARCH_SCAN_DELAY_US");
+    if (!s || !*s) return 0ul;
+    long n = atol(s);
+    return n > 0 ? static_cast<unsigned long>(n) : 0ul;
+  }();
+  return v;
+}
+
+void fullScan(const Config& cfg, std::vector<FileEntry>& out, ScanProgress prog,
+              const std::atomic<bool>* cancel) {
   out.clear();
+
+  auto canceled = [cancel] {
+    return cancel != nullptr && cancel->load(std::memory_order_relaxed);
+  };
+  const unsigned long delayUs = scanDelayUs();
 
   const unsigned nthreads = [] {
     unsigned n = std::thread::hardware_concurrency();
@@ -38,7 +59,11 @@ void fullScan(const Config& cfg, std::vector<FileEntry>& out, ScanProgress prog)
 
   auto popClaim = [&](std::string& d) -> bool {
     std::unique_lock<std::mutex> lk(queueM);
-    cv.wait(lk, [&] { return !queue.empty() || active == 0; });
+    // 用 wait_for 而非 wait：cancel 是 atomic 置位，没有对应的 notify，
+    // 阻塞中的 worker 需靠超时轮询及时察觉取消（上限 ~50ms）。
+    cv.wait_for(lk, std::chrono::milliseconds(50),
+                [&] { return !queue.empty() || active == 0 || canceled(); });
+    if (canceled()) return false;
     if (queue.empty()) return false;  // active==0 且空队列 => 结束
     d = std::move(queue.front());
     queue.pop_front();
@@ -67,6 +92,7 @@ void fullScan(const Config& cfg, std::vector<FileEntry>& out, ScanProgress prog)
     std::vector<std::string> subdirs;
     struct dirent* de;
     while ((de = readdir(dp)) != nullptr) {
+      if (canceled()) break;
       if (strcmp(de->d_name, ".") == 0 || strcmp(de->d_name, "..") == 0) continue;
       std::string child = joinPath(dir, de->d_name);
       if (cfg.isExcluded(child)) continue;
@@ -107,6 +133,7 @@ void fullScan(const Config& cfg, std::vector<FileEntry>& out, ScanProgress prog)
 
     for (auto& sub : subdirs) push(std::move(sub));
     if (!subdirs.empty()) stats.dirs.fetch_add(subdirs.size(), std::memory_order_relaxed);
+    if (delayUs > 0) usleep(static_cast<useconds_t>(delayUs));
     (void)tid;
   };
 
@@ -127,6 +154,7 @@ void fullScan(const Config& cfg, std::vector<FileEntry>& out, ScanProgress prog)
   for (unsigned t = 0; t < nthreads; ++t) {
     workers.emplace_back([&, t] {
       while (true) {
+        if (canceled()) break;
         std::string d;
         if (!popClaim(d)) break;
         processDir(d, t, perThread[t]);
