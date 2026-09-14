@@ -38,6 +38,11 @@ class Db {
   bool loadAll(std::vector<FileEntry>& out);
 
   int64_t countFiles();
+  // Spec 017 sqlite 模式：stats 与 watcher 目录列表均来自 DB（不常驻全量条目）。
+  int64_t countDirs();
+  // 与 Index::totalBytes 同语义：逐条 sanitizeSize 后求和（SQL 侧做同规则归零）。
+  int64_t sumSanitizedBytes();
+  bool loadDirs(std::vector<std::string>& out);
   std::string getMeta(const std::string& key, const std::string& def = "");
   bool setMeta(const std::string& key, const std::string& val);
 

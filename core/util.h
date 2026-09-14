@@ -30,6 +30,8 @@ std::string isoTime(int64_t t);     // Unix 秒 -> "YYYY-MM-DD HH:MM:SS"
 
 // 简单 glob：支持 * 和 ?，大小写不敏感
 bool globMatch(const std::string& pattern, const std::string& text);
+// 同上，但文本以裸指针+长度给出（供 arena 布局避免物化 std::string）
+bool globMatchView(const std::string& pattern, const char* text, std::size_t len);
 
 // 严格 base64（标准字母表 A-Za-z0-9+/ + '=' 填充）。
 // 编码：无长度限制；解码：拒绝空白与非法字符、长度非 4 的倍数、非法填充，

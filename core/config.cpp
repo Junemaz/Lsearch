@@ -66,6 +66,9 @@ Config Config::load(const std::string& file) {
       c.index_hidden = (val == "1" || val == "true" || val == "yes");
     } else if (key == "follow_symlinks") {
       c.follow_symlinks = (val == "1" || val == "true" || val == "yes");
+    } else if (key == "hot_index") {
+      // 容错解析：仅 "sqlite"（大小写不敏感）走低内存模式，其余值保持默认 memory。
+      c.hot_index_sqlite = (toLowerAscii(val) == "sqlite");
     }
   }
   return c;
@@ -84,6 +87,9 @@ void Config::save(const std::string& file) const {
   out << "index_hidden = " << (index_hidden ? "1" : "0") << "\n";
   out << "\n# 是否跟随符号链接（0/1；跟随可避免循环，但不跟随更安全）\n";
   out << "follow_symlinks = " << (follow_symlinks ? "1" : "0") << "\n";
+  out << "\n# 热索引模式：memory（默认，低延迟，常驻精简索引）| sqlite（低内存，查询走 DB）\n";
+  out << "# 切换需编辑本文件并重启 lsearchd。\n";
+  out << "hot_index = " << (hot_index_sqlite ? "sqlite" : "memory") << "\n";
 }
 
 bool Config::containsPath(const std::string& p) const {

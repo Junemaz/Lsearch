@@ -1,6 +1,6 @@
 # Lsearch Spec 017 — 索引内存精简与可选低内存模式
 
-Status: **Proposed**
+Status: **Done**
 
 ## Why
 真实索引（317,527 项）实测：
@@ -69,18 +69,52 @@ When 切换 `hot_index` 并重启
 Then 行为与提示一致，无残留状态
 
 ## Task
-- [ ] 设计并实现 arena/偏移布局（保持匹配与排序语义）
-- [ ] 开放寻址 path 索引；去重 name
-- [ ] `hot_index` 配置 + `stats`/`get-config`/`set-opts` 暴露 + 提示
-- [ ] `sqlite` 查询模式（复用 `db_`；并发契约遵循 Spec 015）
-- [ ] benchmark 脚本 + 证据（RSS / P50 / P95 / 条目数）
-- [ ] 全量复跑 + 文档同步 + Evidence → Done
+- [x] 基准脚本 `scripts/bench-search.sh`（DB 副本 / 合成树；RSS + P50/P95；隔离环境）
+- [x] 设计并实现 arena/偏移布局（保持匹配与排序语义）
+- [x] 开放寻址 path 索引；去重 name
+- [x] `hot_index` 配置 + `stats`/`get-config` 暴露 + 提示
+- [x] `sqlite` 查询模式（复用 `db_`；并发契约遵循 Spec 015）
+- [x] benchmark 证据（RSS / P50 / P95 / 条目数，memory vs sqlite）
+- [x] 全量复跑 + 文档同步 + Evidence → Done
 
 ## Deliverable
 `core/search.*`、`core/indexer.*`、`core/db.*`、`core/config.*`、`daemon/`、`scripts/`（benchmark）、文档
 
 ## Evidence
-（待实现后填充）
+
+### 实现
+- **精简布局**（`core/search.*`）：path/name 统一存入 **arena**（32-bit 偏移）；`name` 若恰为
+  path 的 basename 后缀则不重复存储；不再保留 `name_low`/`path_low` 副本（匹配时按需 ASCII 折小写）；
+  `unordered_map<string,size_t>` → **开放寻址 uint32 哈希**（FNV-1a over arena，墓碑复用，
+  负载 ≤0.75，碎片超阈值触发 arena 压缩）。公开 `Index` API 与语义**完全不变**。
+- **`hot_index = memory | sqlite`**（配置项，改写后重启生效；**未扩展 `set-opts`**，避免协议变更）；
+  `get-config` 追加 `hot_index=`；`stats` 追加 `mode=` 与 `mem_est_bytes=`（均为向后兼容追加）。
+- **`sqlite` 模式**：查询流式走 DB（复用同一匹配/排序/裁剪逻辑），DB 亦提供 watcher 目录收集与统计；
+  并发遵循 Spec 015 锁序（调用方持 `dbM_`），Spec 016 的正确性修复保持有效。
+
+### 实测（`scripts/bench-search.sh`，317,534 项，隔离环境；我方独立复跑）
+| 模式 | RSS | B/项 | P50（report / .md） | 命中计数 |
+|---|---|---|---|---|
+| 基线（017 前，016 构建） | 194.3 MiB | 642 | 3.1 / 3.7 ms | 187 / 6414 |
+| **memory（默认）** | **84.8 MiB** | **280** | **2.8 / 3.8 ms** | 187 / 6414 |
+| **sqlite** | **23.0 MiB** | **76** | **37.7 / 39.6 ms** | 187 / 6414 |
+
+- memory 模式 RSS **-56%**（194.3 → 84.8 MiB，280 B/项）且 P50 不劣化（略优）→ 达标（目标 ≤100 MiB）。
+- sqlite 模式 RSS **-88%**（23.0 MiB），结果与 memory **逐字节一致**，延迟落在预期 25–48 ms 区间。
+
+### 测试
+```
+lsearch_tests                      3613 checks / 0 failures（+3039：arena/哈希扩容/墓碑/压缩/子树上限/名称非 basename 等压力用例）
+scripts/self-test-hotindex-diff.sh  36/36（memory ↔ sqlite 逐字节一致：under / glob / re: / 各排序 / --count / -d / -0）
+既有套件                            25 / 18 / 37 / 22 / 7 / 13 / 78 全绿
+运行前后 pgrep -x lsearchd          仅真实守护进程 455627（未受影响）
+```
+
+### 偏差记录
+1. `hot_index` 仅经配置文件切换（重启生效），**不扩展 `set-opts`**（避免协议面变更）。
+2. `stats`/`get-config` 的新字段为**追加**，旧客户端/旧脚本不受影响。
+3. `sqlite` 模式的 `re:`/glob 需在 DB 扫描后在 C++ 侧过滤（延迟随命中集变化），已在脚本与本文档记录。
+4. FTS5 trigram 仍列为后续规格（本规格非目标）。
 
 ### 立项数据（真实索引实测）
 ```
@@ -89,6 +123,18 @@ daemon RSS = 243.1 MiB  (~800 B/项)
 SQLite LIKE %report% -> 48.2 ms ; %log% -> 25.5 ms ; %.md% -> 27.2 ms ; %zzz_absent% -> 24.7 ms
 内存路径（lsearch --count，含启动+IPC）: report 12 ms ; log 8 ms ; zzz_absent 7 ms
 ```
+
+### 基线（`scripts/bench-search.sh --db <真实 DB 副本>`，016 构建，隔离环境）
+```
+索引：files=317548 dirs=37764 size=25.9 GB（016 修复后不再溢出）
+内存：RSS=194.3 MiB   ≈ 642 B/项
+查询延迟（lsearch --count，含启动+IPC，reps=7）：
+  'report'      count=187   P50=3.1 ms  P95=3.8 ms
+  '.md'         count=6414  P50=3.7 ms  P95=4.4 ms
+  'zzz_absent'  count=0     P50=3.0 ms  P95=3.4 ms
+```
+**017 目标**：同等条目数下 RSS 降到 ≤100 MiB（或至少腰斩），且 P50 不劣化；`hot_index=sqlite`
+需给出同 corpus 的延迟对照（预期 ~25–48 ms 量级）与逐字节一致的结果。
 
 ## 依赖
 与 [Spec 015](015-daemon-concurrency.md)（并发契约）与 [Spec 016](016-watcher-correctness.md)

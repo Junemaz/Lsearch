@@ -11,6 +11,10 @@ struct Config {
   std::vector<std::string> excludes;  // 排除路径前缀
   bool index_hidden = false;          // 是否索引以 . 开头的隐藏文件/目录
   bool follow_symlinks = false;       // 是否跟随符号链接
+  // 热索引模式（Spec 017）：false=memory（常驻精简索引，默认，低延迟）；
+  // true=sqlite（不常驻全量条目，查询走 DB，显著降内存、延迟见规格）。
+  // 仅启动时读取；切换需改配置并重启（set-opts 不涉及，避免协议面扩张）。
+  bool hot_index_sqlite = false;
 
   // 派生路径（由环境决定，不入配置）
   std::string config_file;  // 实际加载的配置文件

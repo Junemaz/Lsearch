@@ -22,6 +22,7 @@ Lsearch 是一款参考 Windows 版 **Everything** 打造的文件名即时搜�
 - CLI：`lsearch <关键词>` 即时输出路径，支持子串/通配符/`re:` 正则、排序、计数、`--under` 子树过滤、脚本用 `-0`
 - TUI：`lsearch-tui` 输入即搜、方向键浏览、Enter 打开（xdg-open）、F5 重建
 - GUI：Qt5 实时搜索框 + 结果表格 + 托盘常驻 + 索引管理页
+- 轻量可控的内存占用：内存热索引（31.7 万项 ≈ **85 MiB**、P50 ~3 ms）；`hot_index=sqlite` 低内存模式 ≈ **23 MiB**（查询 ~38 ms，结果逐字节一致）
 - **MCP 前端 `lsearch-mcp`**：stdio JSON-RPC，把本机文件名索引接给 LLM 编码代理（`search_files` / `index_stats` 两个工具）；兼容 legacy 与 modern 协议（含真实客户端的 `_meta.progressToken`），并由**官方 conformance 套件 + 第三方 Inspector + 真实客户端转录回归**验证（见 Spec 011）
 - D-Bus 集成：`lsearch-dbus` 会话总线门面，支持按需激活与桌面集成
 - 默认仅索引用户家目录，简单纯文本配置（`~/.config/lsearch/lsearch.conf`）
@@ -136,6 +137,13 @@ TUI 自动化自测（tmux 伪终端注入按键并断言画面；需装 tmux）
 ```bash
 ./scripts/self-test-tui.sh      # 输入即搜 / 通配符 / F5 重建 / Esc 清空 / Ctrl+Q 退出
 ```
+热索引模式差分与内存/延迟基准（Spec 017；复制真实 DB 到隔离环境，不打扰运行中的 daemon）：
+```bash
+./scripts/self-test-hotindex-diff.sh -s                            # memory ↔ sqlite 逐字节一致（36 项）
+./scripts/bench-search.sh --db ~/.local/share/lsearch/lsearch.db   # memory：≈85 MiB / P50 2.8 ms
+./scripts/bench-search.sh --db ~/.local/share/lsearch/lsearch.db --mode sqlite  # sqlite：≈23 MiB / ~38 ms
+./scripts/bench-search.sh --gen 20000                              # 合成树
+```
 
 ## 配置（简单纯文本，首次运行自动生成）
 ```ini
@@ -143,6 +151,7 @@ TUI 自动化自测（tmux 伪终端注入按键并断言画面；需装 tmux）
 paths = /home/user, /data        # 索引根路径，逗号分隔；默认仅用户家目录
 excludes = /proc,/sys,/dev,/run  # 排除前缀（默认另含 ~/.cache、~/.git、回收站）
 index_hidden = 1                 # 是否索引隐藏文件/目录（默认 1）
+hot_index = memory               # 内存模式：memory（快，默认）/ sqlite（省内存，查询 ~38ms）
 follow_symlinks = 0              # 是否跟随符号链接
 ```
 管理命令：`lsearchd --add-path /data`、`lsearchd --remove-path /data`、

@@ -144,6 +144,43 @@ int64_t Db::countFiles() {
   return n;
 }
 
+int64_t Db::countDirs() {
+  sqlite3_stmt* st = nullptr;
+  if (sqlite3_prepare_v2(db_, "SELECT COUNT(*) FROM files WHERE is_dir=1;", -1, &st,
+                         nullptr) != SQLITE_OK)
+    return -1;
+  int64_t n = (sqlite3_step(st) == SQLITE_ROW) ? sqlite3_column_int64(st, 0) : -1;
+  sqlite3_finalize(st);
+  return n;
+}
+
+int64_t Db::sumSanitizedBytes() {
+  // 与 Index::build/add 的 sanitizeSize 规则一致：负值或 >1 PiB 归零后求和。
+  const char* sql =
+      "SELECT COALESCE(SUM(CASE WHEN size<0 OR size>?1 THEN 0 ELSE size END),0) FROM files;";
+  sqlite3_stmt* st = nullptr;
+  if (sqlite3_prepare_v2(db_, sql, -1, &st, nullptr) != SQLITE_OK) return -1;
+  sqlite3_bind_int64(st, 1, kMaxPlausibleFileSize);
+  int64_t n = (sqlite3_step(st) == SQLITE_ROW) ? sqlite3_column_int64(st, 0) : -1;
+  sqlite3_finalize(st);
+  return n;
+}
+
+bool Db::loadDirs(std::vector<std::string>& out) {
+  out.clear();
+  sqlite3_stmt* st = nullptr;
+  if (sqlite3_prepare_v2(db_, "SELECT path FROM files WHERE is_dir=1;", -1, &st, nullptr) !=
+      SQLITE_OK)
+    return false;
+  while (sqlite3_step(st) == SQLITE_ROW) {
+    const unsigned char* p = sqlite3_column_text(st, 0);
+    if (p) out.emplace_back(reinterpret_cast<const char*>(p),
+                            static_cast<size_t>(sqlite3_column_bytes(st, 0)));
+  }
+  sqlite3_finalize(st);
+  return true;
+}
+
 std::string Db::getMeta(const std::string& key, const std::string& def) {
   sqlite3_stmt* st = nullptr;
   const char* sql = "SELECT v FROM meta WHERE k=?1;";
