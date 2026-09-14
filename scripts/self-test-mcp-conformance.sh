@@ -76,6 +76,13 @@ fi
 echo "==> 1/ 环境探针（npx / node / 网络）"
 command -v npx >/dev/null 2>&1 || skip "未找到 npx"
 command -v node >/dev/null 2>&1 || skip "未找到 node"
+# 与 Inspector 同因：该外部套件栈需要较新的 Node；低版本下 npx 会秒退，
+# 表现为「无法解析」而非真实失败。此处提前 SKIP 并说明，避免误导。
+NODE_MAJOR=$(node --version 2>/dev/null | sed -n 's/^v\([0-9]*\)\..*/\1/p')
+NODE_MINOR=$(node --version 2>/dev/null | sed -n 's/^v[0-9]*\.\([0-9]*\).*/\1/p')
+if [ -z "$NODE_MAJOR" ] || [ "$NODE_MAJOR" -lt 22 ] || { [ "$NODE_MAJOR" -eq 22 ] && [ "$NODE_MINOR" -lt 19 ]; }; then
+  skip "需要 Node >= 22.19（当前 $(node --version 2>/dev/null)）：外部 conformance 套件的 Node 版本要求"
+fi
 command -v python3 >/dev/null 2>&1 || skip "未找到 python3"
 if ! timeout 240 npx --prefer-offline -y @modelcontextprotocol/conformance --version >/dev/null 2>&1; then
   skip "无法解析 @modelcontextprotocol/conformance（npx 缓存缺失且无网络）"

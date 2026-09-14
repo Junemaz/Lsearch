@@ -1,0 +1,120 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# 同一分支/PR 有新提交时取消仍在跑的旧 run，避免堆积、节省额度。
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # core（必需）：装依赖 → 构建（含 GUI/TUI）→ 跑全部核心自测套件。
+  # 任一必需步骤失败即整体变红；各套件缺少 npx/网络/第三方工具时按既有
+  # SKIP 语义 exit 0，不算失败。
+  core:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      # qtbase5-dev 是必需项：framelesswindow / lsearch-gui 依赖 Qt5 Widgets，
+      # 装了才能构建完整产物，也才能验证 GUI 目标仍在；libncurses-dev 供 TUI，
+      # libdbus-1-dev 供 lsearch-dbus，dbus/libglib2.0-bin/nc/tmux 提供
+      # dbus-run-session / gdbus / nc / tmux 这几个自测前置工具。
+      - name: 安装构建与测试依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake libsqlite3-dev libdbus-1-dev libncurses-dev \
+            qtbase5-dev python3 tmux netcat-openbsd dbus libglib2.0-bin
+
+      - name: 配置（Release）
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: 构建
+        run: cmake --build build -j"$(nproc)"
+
+      # 套件顺序与本地一致；-s 跳过各脚本内部的重复构建。
+      - name: 运行核心自测套件
+        run: |
+          set -euo pipefail
+          echo "==> 单测 lsearch_tests"
+          ./build/lsearch_tests
+          echo "==> self-test.sh"
+          ./scripts/self-test.sh -s
+          echo "==> self-test-ipc.sh"
+          ./scripts/self-test-ipc.sh -s
+          echo "==> self-test-mcp.sh"
+          ./scripts/self-test-mcp.sh -s
+          echo "==> self-test-dbus.sh"
+          ./scripts/self-test-dbus.sh -s
+          echo "==> self-test-ipc-external.sh"
+          ./scripts/self-test-ipc-external.sh -s
+          echo "==> self-test-ipc-diff.sh"
+          ./scripts/self-test-ipc-diff.sh -s
+          echo "==> self-test-ipc-matrix.sh"
+          ./scripts/self-test-ipc-matrix.sh -s
+          echo "==> self-test-tui.sh"
+          ./scripts/self-test-tui.sh -s
+
+      # 每个套件都必须自己清理它拉起的守护进程。这里做兜底断言，
+      # 防止"测试通过但 lsearchd 泄漏"从 CI 溜过去。用 always() 保证
+      # 即使前面的套件失败也会检查残留。
+      - name: 断言无残留 lsearchd 进程
+        if: always()
+        run: |
+          for i in $(seq 1 10); do
+            if ! pgrep -x lsearchd >/dev/null 2>&1; then
+              echo "OK：无残留 lsearchd 进程"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::检测到残留 lsearchd 进程；某个自测套件未清理它拉起的守护进程："
+          pgrep -ax lsearchd || true
+          exit 1
+
+  # mcp-external（允许失败）：外部 MCP 验证器（官方 conformance / Inspector /
+  # 转录回放 / 负形状矩阵）。这些套件依赖 npx / 网络 / 第三方工具，缺失时脚本
+  # 按既有语义 SKIP(exit 0)；但真实网络抖动不应让整个仓库变红，故
+  # continue-on-error 只把它当信号，不阻塞合并。
+  mcp-external:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装构建依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake libsqlite3-dev libdbus-1-dev libncurses-dev \
+            qtbase5-dev python3
+
+      # Node >= 22.19 是外部套件的硬要求：@modelcontextprotocol/inspector 的
+      # engines 为 node >= 22.19.0（低版本下 npm 仍会装上，但 CLI 运行产出空结果）。
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: 配置（Release）
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: 构建
+        run: cmake --build build -j"$(nproc)"
+
+      # 末行用真实 opencode 会话转录跑回放回归（Spec 011）。
+      # 每套外部验证都用 timeout 兜底：npx 下载或第三方桥接一旦挂起，
+      # 不允许把 job 拖到 GitHub 默认的数小时上限。
+      - name: 运行 MCP 外部验证套件
+        run: |
+          set -euo pipefail
+          timeout 900 ./scripts/self-test-mcp-conformance.sh -s
+          timeout 600 ./scripts/self-test-mcp-inspector.sh -s
+          timeout 300 ./scripts/self-test-mcp-matrix.sh -s
+          timeout 300 ./scripts/self-test-mcp-replay.sh -s
+          timeout 300 ./scripts/self-test-mcp-replay.sh -s tests/fixtures/mcp-trace-real.jsonl
