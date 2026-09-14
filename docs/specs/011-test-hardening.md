@@ -138,11 +138,19 @@ PASS  replay[4] tools/call id=4 search_files
 PASS  replay lifecycle stdin-EOF exit 0
 PASS  replay stdout all JSON-RPC
 ```
-- **真实 opencode 转录（待用户采集一次）**：`export LSEARCH_MCP_TRACE=/tmp/lsearch-mcp-real.jsonl`
-  后把 opencode.json 的 lsearch MCP command 指向 `scripts/mcp-trace-wrapper.sh`（见脚本头示例），
-  跑一次“列出工具 + 调 index_stats/search_files”的会话；随后
-  `scripts/self-test-mcp-replay.sh /tmp/lsearch-mcp-real.jsonl` 回放，并把有价值的一份放入
-  `tests/fixtures/` 长期保存。
+### R2（续）— 真实 opencode 转录（已采集并长期保存）
+- `tests/fixtures/mcp-trace-real.jsonl`：真实 opencode 经 wrapper 的一次会话（11 行 = 7 c2s + 4 s2c）。
+  采集方式：把 `~/.config/opencode/opencode.jsonc` 的 lsearch MCP `command` 临时指向
+  `scripts/mcp-trace-wrapper.sh`，`environment` 设 `LSEARCH_MCP_TRACE` 与
+  `LSEARCH_MCP_BIN=build/lsearch-mcp`（真实客户端字节 + 当前实现），重启 opencode 后各调一次
+  `index_stats` / `search_files`；采集后配置已还原。
+- 真实客户端行为（合成 fixture 无法保证，现已被此 fixture 锁定）：
+  - `initialize` **不带** `"jsonrpc"` 字段（与合成 fixture 不同）；
+  - 两个 `tools/call` 都带 **legacy** `_meta:{"progressToken":<number>}`——即最初触发 `-32602` 的形态；
+  - 会话结束发 `notifications/cancelled{requestId,reason:"AbortError…"}`。
+- `./scripts/self-test-mcp-replay.sh -s tests/fixtures/mcp-trace-real.jsonl` → **通过 6 项 / 失败 0 项**。
+- 驱动放宽（结构等价语义，另见偏差记录）：空数组与任意数组视为**结构兼容**——回放跑在隔离空索引上，
+  结果集基数（`search_files.results` 条数）由数据决定，不构成协议差异；非空时仍逐元素比结构。
 
 ### R3 — 负形状矩阵（表驱动、无 timing 断言）
 `./scripts/self-test-mcp-matrix.sh -s` → **通过 27 项 / 失败 0 项**，覆盖：
@@ -185,6 +193,8 @@ SKIP: 无法解析 @modelcontextprotocol/inspector（npx 缓存缺失且无网�
   （supergateway 一次成功且为任务首选）。
 - npx 统一加 `--prefer-offline`（仅此一处偏离任务给出的原命令；语义等价，只影响解析缓存策略）。
 - 不引入托管 CI（本规格非目标）。
+- replay 结构等价放宽：**空数组 ↔ 任意数组视为兼容**（数据依赖的结果集基数不比长度），
+  否则录于真实索引的转录无法在隔离空环境回放；详见 R2（续）。
 
 ### 独立复验发现的测试自身缺陷（已修复）
 实现完成后的独立复验中，运行 `self-test-mcp-inspector.sh` 暴露了**测试自身**的泄漏与脆弱性
