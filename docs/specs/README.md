@@ -30,6 +30,7 @@
 | [010-search-protocol](010-search-protocol.md) | 检索协议 v2：真 total/truncated + 路径子树过滤 | **Done** | `lsearch_tests` 481、`self-test-ipc.sh` 18/18、性能证据 |
 | [011-test-hardening](011-test-hardening.md) | 协议测试加固（外部验证器 + 转录回放 + 负形状矩阵） | **Done** | conformance `server` PASS（基线内预期）、Inspector 3/3、replay 6/6（合成 + 真实 opencode 转录）、matrix 27/27 |
 | [012-ipc-hardening](012-ipc-hardening.md) | IPC 协议加固（外部验证 + 帧完整性修复） | **Done** | `nc -U` 第三方 7/7、独立客户端×CLI 逐字节差分 13/13、负形状矩阵 33/33；`search3` 转义修复 `\n`/`\t` 帧破坏；`lsearch_tests` 511 |
+| [013-ipc-input-validation](013-ipc-input-validation.md) | IPC 输入校验与配置往返完整性（`ERR bad path`/`ERR bad limit`） | **Done** | `lsearch_tests` 552、IPC 矩阵 61/61（含拒绝后零副作用与 `remove-path` 落盘）、外部 7/7、差分 13/13 |
 
 如何核对：每张规格的 `## Scenario` 是"用户可复现的验收场景"，`## Evidence` 给出
 "我如何证明它成立"（单测名 + 命令）。
