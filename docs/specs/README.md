@@ -33,7 +33,7 @@
 | [013-ipc-input-validation](013-ipc-input-validation.md) | IPC 输入校验与配置往返完整性（`ERR bad path`/`ERR bad limit`） | **Done** | `lsearch_tests` 552、IPC 矩阵 61/61（含拒绝后零副作用与 `remove-path` 落盘）、外部 7/7、差分 13/13 |
 | [015-daemon-concurrency](015-daemon-concurrency.md) | 守护进程并发安全（重建 × 管理命令竞态） | **Done** | 根因=detached 重建线程并发改 watcher/sqlite/cfg；修复后我方复现 20 轮 add/remove **0 崩溃**、矩阵 61/61×3、全套件绿 |
 | [016-watcher-correctness](016-watcher-correctness.md) | watcher 增量正确性（隐藏过滤 / 重命名 / 统计溢出） | **Done** | 修 4 类缺陷（含"watcher 重启后零 watch 致增量静默失效"与"索引根从未被 watch"）；我方探针 11/11、矩阵 78/78、单测 574 |
-| [017-index-memory](017-index-memory.md) | 索引内存精简与可选低内存模式（`hot_index=memory\\|sqlite`） | **In Progress** | 基线（bench-search.sh）：317k 项 RSS 194 MiB（≈642 B/项）、P50 3.0–3.7 ms；目标 ≤100 MiB |
+| [017-index-memory](017-index-memory.md) | 索引内存精简与可选低内存模式（`hot_index=memory\\|sqlite`） | **Done** | 317,534 项：memory **84.8 MiB**/280 B/项（原 194.3/642）、P50 2.8 ms；sqlite **23.0 MiB**/76 B/项/~38 ms；两模式逐字节一致（36/36）、单测 3613 |
 
 如何核对：每张规格的 `## Scenario` 是"用户可复现的验收场景"，`## Evidence` 给出
 "我如何证明它成立"（单测名 + 命令）。

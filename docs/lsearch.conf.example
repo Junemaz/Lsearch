@@ -8,5 +8,8 @@ excludes = /proc,/sys,/dev,/run,/snap,/home/code/.cache,/home/code/.git
 # 是否索引以 . 开头的隐藏文件/目录（0/1，默认 1；默认排除 .git/.cache/回收站）
 index_hidden = 1
 
+# 热索引模式：memory（默认，查询 ~3ms，31.7 万项约 85 MiB）或 sqlite（约 23 MiB，查询 ~38ms）
+hot_index = memory
+
 # 是否跟随符号链接（0/1，默认 0）
 follow_symlinks = 0
