@@ -16,6 +16,7 @@ jobs:
   # SKIP 语义 exit 0，不算失败。
   core:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
 
@@ -82,6 +83,7 @@ jobs:
   # continue-on-error 只把它当信号，不阻塞合并。
   mcp-external:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
@@ -106,11 +108,13 @@ jobs:
         run: cmake --build build -j"$(nproc)"
 
       # 末行用真实 opencode 会话转录跑回放回归（Spec 011）。
+      # 每套外部验证都用 timeout 兜底：npx 下载或第三方桥接一旦挂起，
+      # 不允许把 job 拖到 GitHub 默认的数小时上限。
       - name: 运行 MCP 外部验证套件
         run: |
           set -euo pipefail
-          ./scripts/self-test-mcp-conformance.sh -s
-          ./scripts/self-test-mcp-inspector.sh -s
-          ./scripts/self-test-mcp-matrix.sh -s
-          ./scripts/self-test-mcp-replay.sh -s
-          ./scripts/self-test-mcp-replay.sh -s tests/fixtures/mcp-trace-real.jsonl
+          timeout 900 ./scripts/self-test-mcp-conformance.sh -s
+          timeout 600 ./scripts/self-test-mcp-inspector.sh -s
+          timeout 300 ./scripts/self-test-mcp-matrix.sh -s
+          timeout 300 ./scripts/self-test-mcp-replay.sh -s
+          timeout 300 ./scripts/self-test-mcp-replay.sh -s tests/fixtures/mcp-trace-real.jsonl
