@@ -1,0 +1,59 @@
+# Lsearch MCP conformance — expected-failures baseline (Spec 011, Requirement 1).
+#
+# Lists the official `@modelcontextprotocol/conformance` server scenarios that
+# `lsearch-mcp` is *expected* to fail because they exercise MCP capabilities the
+# server deliberately does not implement (Spec 006 "非目标"), or because they
+# target the stdio->HTTP bridge's HTTP transport rather than the stdio server.
+#
+# Schema (see the conformance README / `@modelcontextprotocol/conformance`):
+#   server:  # array of scenario names -> expected FAILURE (or WARNING)
+#
+# Exit-code semantics enforced by the tool:
+#   fails   + listed    -> expected failure (ok)
+#   fails   + not listed-> unexpected regression (exit 1)
+#   passes  + listed    -> stale baseline, remove the entry (exit 1)
+#   passes  + not listed-> normal pass (ok)
+#
+# Verified against: @modelcontextprotocol/conformance 0.1.16, suite "active".
+# The three in-scope scenarios (server-initialize, ping, tools-list) MUST stay
+# OUT of this list so a regression there fails the suite.
+server:
+  # --- capabilities intentionally not implemented (Spec 006 non-goals) ---
+  - logging-set-level                 # logging/setLevel + log notifications: not implemented
+  - completion-complete               # completion/complete: not implemented
+  - elicitation-sep1034-defaults      # elicitation: not implemented
+  - elicitation-sep1330-enums         # elicitation: not implemented
+  - resources-list                    # resources capability: not implemented
+  - resources-read-text               # resources/read (text): not implemented
+  - resources-read-binary             # resources/read (binary): not implemented
+  - resources-templates-read          # resources/templates/list + read: not implemented
+  - resources-subscribe               # resources/subscribe: not implemented
+  - resources-unsubscribe             # resources/unsubscribe: not implemented
+  - prompts-list                      # prompts capability: not implemented
+  - prompts-get-simple                # prompts/get: not implemented
+  - prompts-get-with-args             # prompts/get with arguments: not implemented
+  - prompts-get-embedded-resource     # prompts/get embedded resource: not implemented
+  - prompts-get-with-image            # prompts/get image content: not implemented
+
+  # --- reference "everything server" tool surface ---
+  # These scenarios call fixed reference tools (test_simple_text, test_image_content,
+  # test_audio_content, test_embedded_resource, test_multiple_content_types,
+  # test_error_handling, test_sampling, test_tool_with_progress, test_tool_with_logging,
+  # test_elicitation). lsearch-mcp intentionally exposes only the read-only
+  # search_files / index_stats tools (Spec 006 R4), so the reference tools are absent.
+  - tools-call-simple-text           # reference tool test_simple_text: not exposed
+  - tools-call-image                 # reference tool test_image_content: not exposed
+  - tools-call-audio                 # reference tool test_audio_content: not exposed
+  - tools-call-embedded-resource      # reference tool test_embedded_resource: not exposed
+  - tools-call-mixed-content          # reference tool test_multiple_content_types: not exposed
+  - tools-call-error                  # reference tool test_error_handling: not exposed
+  - tools-call-with-progress          # reference tool test_tool_with_progress: not exposed
+  - tools-call-sampling               # reference tool test_sampling (sampling): not implemented
+  - tools-call-with-logging           # reference tool test_tool_with_logging (logging): not implemented
+  - tools-call-elicitation            # reference tool test_elicitation (elicitation): not implemented
+
+  # --- HTTP transport hardening owned by the stdio->HTTP bridge ---
+  # lsearch-mcp speaks stdio only (Spec 006 non-goal: no HTTP transport). These
+  # checks exercise the supergateway bridge endpoint, not the server process:
+  - dns-rebinding-protection          # evil Host/Origin rejected: bridge's HTTP concern, not stdio
+  - server-sse-multiple-streams       # stateful SSE session id: bridge runs stateless (WARNING)

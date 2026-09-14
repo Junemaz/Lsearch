@@ -66,7 +66,21 @@ TUI/GUI/D-Bus 仍走旧 `search` 命令（`idx.search()` 早停于请求 limit �
   （UKUI/GNOME shell）、文件管理器集成、`IndexChanged` 信号与 Properties → 后续规格。
 - **多架构打包**：x86_64 + aarch64（飞腾/鲲鹏）交叉编译矩阵。
 
-## 6. 开源参考
+## 6. 协议面测试与外部验证（Spec 011）
+
+协议表面（MCP / IPC / D-Bus）的“完成”必须包含**至少一个外部验证器**（AGENTS.md 全局规则），
+自写 driver 只能证明“在我们假设的客户端下正确”，不能替代规范/真实客户端行为：
+
+- **MCP**：官方 `@modelcontextprotocol/conformance`（`server` 模式，经 supergateway
+  stdio→HTTP 桥）、第三方 Inspector CLI、真实客户端（opencode）转录回放；本服务刻意不实现的
+  能力（resources/sampling/elicitation/logging/completion/prompts 等，见 Spec 006 非目标）
+  以 expected-failures 基线记录理由（`scripts/mcp-conformance-baseline.yml`）。
+- **IPC**：`scripts/self-test-ipc.sh`（Unix socket 原始协议 P1–P18）。
+- **D-Bus**：`scripts/self-test-dbus.sh`（`dbus-run-session` + `gdbus` 第三方工具 D1–D22）。
+
+详见 [Spec 011](specs/011-test-hardening.md)（负形状矩阵 / 转录回放 / 外部验证脚本）。
+
+## 7. 开源参考
 - [Fsearch](https://github.com/cboxdoerfer/fsearch)：借鉴索引更新与索引数据结构（C/GTK3）。
 - [fd](https://github.com/sharkdp/fd) / [ripgrep](https://github.com/BurntSushi/ripgrep)：并行遍历、忽略规则技巧。
 - [fzf](https://github.com/junegunn/fzf)：TUI 交互（模糊匹配、预览）体验参考。

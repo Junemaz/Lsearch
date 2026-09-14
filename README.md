@@ -66,6 +66,16 @@ D-Bus 桥接自测（`dbus-run-session` + `gdbus`，D1–D22；需 dbus-utils）
 ./scripts/self-test-dbus.sh     # 自动构建后跑全部 22 项
 ./scripts/self-test-dbus.sh -s  # 跳过构建
 ```
+MCP 协议加固（Spec 011；外部验证器 + 转录回放 + 负形状矩阵；外部项需 npx/网络，缺失则 SKIP）：
+```bash
+./scripts/self-test-mcp-conformance.sh -s  # 官方 conformance server 套件（supergateway stdio→HTTP 桥；基线内预期失败）
+./scripts/self-test-mcp-inspector.sh -s    # 第三方 Inspector CLI：tools/list + index_stats（3 项）
+./scripts/self-test-mcp-replay.sh -s       # 回放转录 fixture（6 项；结构等价，忽略 id/时间）
+./scripts/self-test-mcp-matrix.sh -s       # _meta/id/通知/batch/大小写/参数 负形状矩阵（27 项）
+```
+真实客户端转录：`LSEARCH_MCP_TRACE=/tmp/lsearch-mcp-real.jsonl scripts/mcp-trace-wrapper.sh`
+（把 opencode 的 MCP command 临时指向该 wrapper 跑一次会话，再用
+`scripts/self-test-mcp-replay.sh /tmp/lsearch-mcp-real.jsonl` 回放；详见脚本头注释）。
 TUI 自动化自测（tmux 伪终端注入按键并断言画面；需装 tmux）：
 ```bash
 ./scripts/self-test-tui.sh      # 输入即搜 / 通配符 / F5 重建 / Esc 清空 / Ctrl+Q 退出
