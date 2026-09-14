@@ -17,15 +17,21 @@ DB=""
 GEN=""
 QUERIES="report .md log config"
 REPS=7
+MODE="memory"
 while [ $# -gt 0 ]; do
   case "$1" in
     --db) DB="$2"; shift 2 ;;
     --gen) GEN="$2"; shift 2 ;;
     --queries) QUERIES="$2"; shift 2 ;;
     --reps) REPS="$2"; shift 2 ;;
+    --mode) MODE="$2"; shift 2 ;;
     *) echo "未知参数：$1"; exit 2 ;;
   esac
 done
+case "$MODE" in
+  memory|sqlite) ;;
+  *) echo "未知 --mode：$MODE（应为 memory|sqlite）"; exit 2 ;;
+esac
 
 T="$ROOT/.tmp/bench-search"
 rm -rf "$T"; mkdir -p "$T/home" "$T/run" "$T/config/lsearch" "$T/data/lsearch"
@@ -40,7 +46,7 @@ trap cleanup EXIT
 if [ -n "$DB" ]; then
   [ -f "$DB" ] || { echo "DB 不存在：$DB"; exit 1; }
   cp "$DB" "$T/data/lsearch/lsearch.db"
-  printf 'paths = %s\nindex_hidden = 0\n' "$T/home" > "$T/config/lsearch/lsearch.conf"
+  printf 'paths = %s\nindex_hidden = 0\nhot_index = %s\n' "$T/home" "$MODE" > "$T/config/lsearch/lsearch.conf"
   echo "==> 数据源：DB 副本（$(du -h "$T/data/lsearch/lsearch.db" | cut -f1)）"
 elif [ -n "$GEN" ]; then
   python3 - "$T/home" "$GEN" <<'PY'
@@ -50,10 +56,10 @@ for i in range(n):
     d = os.path.join(home, "d%04d" % (i // 200)); os.makedirs(d, exist_ok=True)
     open(os.path.join(d, "file_%05d.txt" % i), "wb").close()
 PY
-  printf 'paths = %s\nindex_hidden = 0\n' "$T/home" > "$T/config/lsearch/lsearch.conf"
+  printf 'paths = %s\nindex_hidden = 0\nhot_index = %s\n' "$T/home" "$MODE" > "$T/config/lsearch/lsearch.conf"
   echo "==> 数据源：合成树 $GEN 文件"
 else
-  printf 'paths = %s\nindex_hidden = 0\n' "$T/home" > "$T/config/lsearch/lsearch.conf"
+  printf 'paths = %s\nindex_hidden = 0\nhot_index = %s\n' "$T/home" "$MODE" > "$T/config/lsearch/lsearch.conf"
   echo "==> 数据源：空（仅测空索引基线）"
 fi
 

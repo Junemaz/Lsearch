@@ -281,10 +281,11 @@ bool parseLimit(const std::string& s, std::size_t& out) {
   return true;
 }
 
-bool globMatch(const std::string& pattern, const std::string& text) {
+bool globMatchView(const std::string& pattern, const char* text, std::size_t len) {
   // 经典递归 glob：* 匹配任意序列，? 匹配单个字符，大小写不敏感
   const std::string& p = pattern;
-  const std::string& t = text;
+  const char* t = text;
+  const size_t tlen = len;
   auto eq = [](char a, char b) {
     if (a >= 'A' && a <= 'Z') a = static_cast<char>(a - 'A' + 'a');
     if (b >= 'A' && b <= 'Z') b = static_cast<char>(b - 'A' + 'a');
@@ -292,7 +293,7 @@ bool globMatch(const std::string& pattern, const std::string& text) {
   };
   size_t pi = 0, ti = 0;
   size_t star = std::string::npos, mark = 0;
-  while (ti < t.size()) {
+  while (ti < tlen) {
     if (pi < p.size() && (eq(p[pi], t[ti]) || p[pi] == '?')) {
       ++pi;
       ++ti;
@@ -308,6 +309,10 @@ bool globMatch(const std::string& pattern, const std::string& text) {
   }
   while (pi < p.size() && p[pi] == '*') ++pi;
   return pi == p.size();
+}
+
+bool globMatch(const std::string& pattern, const std::string& text) {
+  return globMatchView(pattern, text.data(), text.size());
 }
 
 }  // namespace lsearch

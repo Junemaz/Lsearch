@@ -41,14 +41,18 @@ void Daemon::applyWatch(const WatchEvent& ev) {
     case WatchEvent::Modified: {
       std::lock_guard<std::mutex> dl(dbM_);
       db_.upsert(ev.entry);
-      std::unique_lock<std::shared_mutex> lk(idxLock_);
-      idx_.add(ev.entry);
+      if (!cfg_.hot_index_sqlite) {
+        std::unique_lock<std::shared_mutex> lk(idxLock_);
+        idx_.add(ev.entry);
+      }
       break;
     }
     case WatchEvent::Removed: {
       std::lock_guard<std::mutex> dl(dbM_);
-      std::unique_lock<std::shared_mutex> lk(idxLock_);
-      idx_.removePathAndSubtree(ev.path);
+      if (!cfg_.hot_index_sqlite) {
+        std::unique_lock<std::shared_mutex> lk(idxLock_);
+        idx_.removePathAndSubtree(ev.path);
+      }
       db_.removeSubtree(ev.path);
       break;
     }
@@ -108,10 +112,10 @@ bool Daemon::commitScan(const Config& cfg, std::vector<FileEntry>&& entries,
     }
     db_.commit();
   }
-  {
+  n = entries.size();
+  if (!cfg.hot_index_sqlite) {
     std::unique_lock<std::shared_mutex> lk(idxLock_);
     idx_.build(std::move(entries));
-    n = idx_.size();
   }
   {
     std::lock_guard<std::mutex> dl(dbM_);
@@ -130,6 +134,10 @@ bool Daemon::doFullScan() {
 }
 
 bool Daemon::loadIndexFromDb() {
+  if (cfg_.hot_index_sqlite) {
+    std::lock_guard<std::mutex> dl(dbM_);
+    return db_.countFiles() > 0;
+  }
   std::vector<FileEntry> entries;
   bool ok;
   {
@@ -157,7 +165,10 @@ bool Daemon::init(std::string& err) {
 void Daemon::restartWatcherLocked() {
   watcher_.stop();
   std::vector<std::string> dirs;
-  {
+  if (cfg_.hot_index_sqlite) {
+    std::lock_guard<std::mutex> dl(dbM_);
+    db_.loadDirs(dirs);
+  } else {
     std::shared_lock<std::shared_mutex> lk(idxLock_);
     idx_.collectDirs(dirs);
   }
@@ -305,7 +316,10 @@ void Daemon::buildSearchResponse(const std::string& line, std::string& out) {
   }
   std::vector<SearchResult> res;
   bool truncated = false;
-  {
+  if (cfg_.hot_index_sqlite) {
+    std::lock_guard<std::mutex> dl(dbM_);
+    searchDbLegacy(db_, rest, sort, limit, dirs_only, files_only, res, truncated);
+  } else {
     std::shared_lock<std::shared_mutex> lk(idxLock_);
     idx_.search(rest, sort, limit, dirs_only, files_only, res, truncated);
   }
@@ -346,7 +360,10 @@ void Daemon::buildSearchExResponse(const std::string& line, std::string& out) {
     return;
   }
   SearchOutcome oc;
-  {
+  if (cfg_.hot_index_sqlite) {
+    std::lock_guard<std::mutex> dl(dbM_);
+    searchDbEx(db_, rest, sort, limit, dirs_only, files_only, under, oc);
+  } else {
     std::shared_lock<std::shared_mutex> lk(idxLock_);
     idx_.searchEx(rest, sort, limit, dirs_only, files_only, under, oc);
   }
@@ -388,7 +405,10 @@ void Daemon::buildSearch3Response(const std::string& line, std::string& out) {
     return;
   }
   SearchOutcome oc;
-  {
+  if (cfg_.hot_index_sqlite) {
+    std::lock_guard<std::mutex> dl(dbM_);
+    searchDbEx(db_, rest, sort, limit, dirs_only, files_only, under, oc);
+  } else {
     std::shared_lock<std::shared_mutex> lk(idxLock_);
     idx_.searchEx(rest, sort, limit, dirs_only, files_only, under, oc);
   }
@@ -421,7 +441,10 @@ void Daemon::buildCountExResponse(const std::string& line, std::string& out) {
   }
   bool capped = false;
   size_t total = 0;
-  {
+  if (cfg_.hot_index_sqlite) {
+    std::lock_guard<std::mutex> dl(dbM_);
+    total = countDbEx(db_, rest, dirs_only, files_only, under, capped);
+  } else {
     std::shared_lock<std::shared_mutex> lk(idxLock_);
     total = idx_.countEx(rest, dirs_only, files_only, under, capped);
   }
@@ -438,12 +461,21 @@ void Daemon::handleRequest(const std::string& line, std::string& out) {
   } else if (cmd == "version") {
     out = std::string("OK\nversion=") + kVersion + "\nEND\n";
   } else if (cmd == "stats") {
-    uint64_t files = 0, dirs = 0, bytes = 0;
-    {
+    uint64_t files = 0, dirs = 0, bytes = 0, mem = 0;
+    if (cfg_.hot_index_sqlite) {
+      std::lock_guard<std::mutex> dl(dbM_);
+      int64_t f = db_.countFiles();
+      int64_t d = db_.countDirs();
+      int64_t b = db_.sumSanitizedBytes();
+      files = f > 0 ? static_cast<uint64_t>(f) : 0;
+      dirs = d > 0 ? static_cast<uint64_t>(d) : 0;
+      bytes = b > 0 ? static_cast<uint64_t>(b) : 0;
+    } else {
       std::shared_lock<std::shared_mutex> lk(idxLock_);
       files = idx_.size();
       dirs = idx_.countDirs();
       bytes = idx_.totalBytes();
+      mem = idx_.memoryEstimate();
     }
     out = "OK\n";
     out += "files=" + std::to_string(files) + "\n";
@@ -462,6 +494,8 @@ void Daemon::handleRequest(const std::string& line, std::string& out) {
     out += "rebuilding=" + std::string(rebuilding_ ? "1" : "0") + "\n";
     out += "scan_files=" + std::to_string(scanFiles_.load()) + "\n";
     out += "scan_dirs=" + std::to_string(scanDirs_.load()) + "\n";
+    out += "mode=" + std::string(cfg_.hot_index_sqlite ? "sqlite" : "memory") + "\n";
+    out += "mem_est_bytes=" + std::to_string(mem) + "\n";
     out += "END\n";
   } else if (cmd == "search") {
     buildSearchResponse(line, out);
@@ -507,8 +541,10 @@ void Daemon::handleRequest(const std::string& line, std::string& out) {
         cfg_.paths.erase(std::remove(cfg_.paths.begin(), cfg_.paths.end(), arg), cfg_.paths.end());
         {
           std::lock_guard<std::mutex> dl(dbM_);
-          std::unique_lock<std::shared_mutex> lk(idxLock_);
-          idx_.removePathAndSubtree(arg);
+          if (!cfg_.hot_index_sqlite) {
+            std::unique_lock<std::shared_mutex> lk(idxLock_);
+            idx_.removePathAndSubtree(arg);
+          }
           db_.removeSubtree(arg);
         }
         restartWatcherLocked();
@@ -523,6 +559,7 @@ void Daemon::handleRequest(const std::string& line, std::string& out) {
     out += "excludes=" + joinList(cfg_.excludes, ",") + "\n";
     out += "hidden=" + std::string(cfg_.index_hidden ? "1" : "0") + "\n";
     out += "follow=" + std::string(cfg_.follow_symlinks ? "1" : "0") + "\n";
+    out += "hot_index=" + std::string(cfg_.hot_index_sqlite ? "sqlite" : "memory") + "\n";
     out += "config_file=" + cfg_.config_file + "\n";
     out += "END\n";
   } else if (cmd == "set-paths") {

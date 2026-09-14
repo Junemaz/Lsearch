@@ -8,10 +8,11 @@
 #include <atomic>
 #include <cstdint>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 namespace lsearch {
+
+class Db;
 
 // 校验查询字符串：`re:` 前缀且正则非法时返回 false 并把错误写入 err；
 // 其余情况（含非 `re:` 查询、`re:` 后为空/全空白）一律返回 true。
@@ -52,6 +53,9 @@ class Index {
   uint64_t countDirs() const { return dirs_; }
   uint64_t totalBytes() const { return bytes_; }
 
+  // 常驻内存估算（Spec 017）：arena + 条目数组 + 开放寻址哈希表的容量。
+  size_t memoryEstimate() const;
+
   // 搜索；limit==0 表示不限（仍受内部候选上限保护）。
   // 结果已按 sort 排序并裁剪到 limit。
   // 早停语义（依赖快速路径的 TUI/GUI/旧 search 命令）：候选数达到 limit 即停止扫描。
@@ -79,19 +83,54 @@ class Index {
   size_t candidateCap() const { return candidateCap_; }
 
  private:
+  // 紧凑条目：path/name 字节统一存入 arena_，条目只保留偏移（Spec 017）。
+  // name 若恰为 path 的 basename 后缀则不重复存储，name_off 为 path 内偏移。
   struct Entry {
-    FileEntry e;
-    std::string name_low;  // 预计算小写，加快查询
-    std::string path_low;
+    uint32_t path_off = 0, path_len = 0;
+    uint32_t name_off = 0, name_len = 0;
+    int64_t size = 0, mtime = 0;
+    uint64_t inode = 0;
+    bool is_dir = false;
   };
+  // 开放寻址槽位：0=空，kHashTomb=墓碑，其余为 entries_ 下标+1。
+  static constexpr uint32_t kHashTomb = 0xFFFFFFFFu;
 
+  Entry makeEntry(const FileEntry& fe);
+  SearchResult makeResult(const Entry& e) const;
+  static size_t entryBytes(const Entry& e);
+  static bool nameIsPathSuffix(const Entry& e);
+
+  size_t tableFindSlot(const char* path, size_t len) const;
+  void rehashTo(size_t cap);
+  void reserveTable(size_t expected);
+  void insertSlot(size_t idx);
+
+  void compactArena();
+  void maybeCompactArena();
+
+  std::vector<char> arena_;
+  size_t arena_live_ = 0;  // 存活条目实际占用字节（用于判断 arena 碎片）
   std::vector<Entry> entries_;
-  std::unordered_map<std::string, size_t> pathIndex_;
+  std::vector<uint32_t> slots_;
+  size_t slotUsed_ = 0, slotTomb_ = 0;
+
   std::atomic<uint64_t> dirs_{0};
   std::atomic<uint64_t> bytes_{0};
 
   // 结果候选上限，避免病态查询拖慢；可通过 setCandidateCapForTest 注入小值。
   size_t candidateCap_ = kDefaultCandidateCap;
 };
+
+// hot_index=sqlite（Spec 017）：不常驻全量条目，查询直接走 SQLite。
+// 语义与 Index 内存路径逐字节一致（同一匹配/排序/裁剪逻辑）。
+// 并发契约（Spec 015）：调用方必须持有守护进程的 dbM_ 独占锁。
+void searchDbEx(Db& db, const std::string& query, SortKey sort, size_t limit,
+                bool dirs_only, bool files_only, const std::string& under,
+                SearchOutcome& out);
+void searchDbLegacy(Db& db, const std::string& query, SortKey sort, size_t limit,
+                    bool dirs_only, bool files_only, std::vector<SearchResult>& out,
+                    bool& truncated);
+size_t countDbEx(Db& db, const std::string& query, bool dirs_only, bool files_only,
+                 const std::string& under, bool& capped);
 
 }  // namespace lsearch

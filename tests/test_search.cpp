@@ -465,6 +465,153 @@ TEST(index_add_update_bytes_correct) {
   CHECK_EQ(idx.totalBytes(), (uint64_t)0);
 }
 
+TEST(index_memory_estimate_and_clear) {
+  Index idx;
+  idx.build(sample());
+  CHECK(idx.memoryEstimate() > 0);
+  idx.clear();
+  CHECK_EQ(idx.size(), (size_t)0);
+  CHECK_EQ(idx.countDirs(), (uint64_t)0);
+  CHECK_EQ(idx.totalBytes(), (uint64_t)0);
+}
+
+TEST(index_compact_hash_growth_and_tombstones) {
+  // 触发开放寻址扩容 + 删除墓碑 + 墓碑复用，验证增删查仍与语义一致。
+  std::vector<FileEntry> v;
+  v.reserve(2000);
+  for (int i = 0; i < 2000; ++i)
+    v.push_back({"/d/f" + std::to_string(i), "f" + std::to_string(i), 1, i, false,
+                 static_cast<uint64_t>(i)});
+  Index idx;
+  idx.build(std::move(v));
+  CHECK_EQ(idx.size(), (size_t)2000);
+  for (int i = 0; i < 2000; i += 2) CHECK(idx.remove("/d/f" + std::to_string(i)));
+  CHECK_EQ(idx.size(), (size_t)1000);
+  for (int i = 0; i < 1000; ++i)
+    idx.add({"/d/g" + std::to_string(i), "g" + std::to_string(i), 2, i, false,
+             static_cast<uint64_t>(i)});
+  CHECK_EQ(idx.size(), (size_t)2000);
+  CHECK(!idx.remove("/d/f0"));  // 已删除路径不可再删（祖先前缀不误伤）
+
+  std::vector<SearchResult> out;
+  bool tr;
+  idx.search("f", SortKey::Path, 0, false, false, out, tr);
+  CHECK_EQ(out.size(), (size_t)1000);  // 仅剩奇数 f 条目
+  for (const auto& r : out) CHECK(r.entry.name.rfind("f", 0) == 0);
+  idx.search("g", SortKey::Name, 0, false, false, out, tr);
+  CHECK_EQ(out.size(), (size_t)1000);
+  for (const auto& r : out) CHECK(r.entry.name.rfind("g", 0) == 0);
+}
+
+TEST(index_subtree_and_collect_dirs) {
+  std::vector<FileEntry> v = {
+      {"/root", "root", 0, 1, true, 1},
+      {"/root/a", "a", 0, 1, true, 2},
+      {"/root/a/x.txt", "x.txt", 10, 1, false, 3},
+      {"/root/b", "b", 0, 1, true, 4},
+      {"/root/b/y.txt", "y.txt", 20, 1, false, 5},
+      {"/other", "other", 0, 1, true, 6},
+  };
+  Index idx;
+  idx.build(std::move(v));
+  std::vector<std::string> dirs;
+  idx.collectDirs(dirs);
+  CHECK_EQ(dirs.size(), (size_t)4);
+  CHECK_EQ(idx.countDirs(), (uint64_t)4);
+  CHECK_EQ(idx.totalBytes(), (uint64_t)30);
+
+  CHECK_EQ(idx.removePathAndSubtree("/root/a"), (size_t)2);
+  CHECK_EQ(idx.size(), (size_t)4);
+  CHECK_EQ(idx.countDirs(), (uint64_t)3);
+  CHECK_EQ(idx.totalBytes(), (uint64_t)20);
+  dirs.clear();
+  idx.collectDirs(dirs);
+  CHECK_EQ(dirs.size(), (size_t)3);
+}
+
+TEST(index_subtree_prefix_guard) {
+  // 子树删除按 "/" 边界比较，不得误伤 /ab、/abc 等前缀兄弟。
+  std::vector<FileEntry> v = {
+      {"/a", "a", 0, 1, true, 1},   {"/a/x", "x", 1, 1, false, 2},
+      {"/ab", "ab", 0, 1, true, 3}, {"/ab/y", "y", 1, 1, false, 4},
+      {"/abc", "abc", 1, 1, false, 5},
+  };
+  Index idx;
+  idx.build(std::move(v));
+  CHECK_EQ(idx.removePathAndSubtree("/a"), (size_t)2);
+  std::vector<SearchResult> out;
+  bool tr;
+  idx.search("y", SortKey::Path, 0, false, false, out, tr);
+  CHECK_EQ(out.size(), (size_t)1);
+  CHECK_EQ(out[0].entry.path, std::string("/ab/y"));
+}
+
+TEST(index_name_not_basename_preserved) {
+  // 紧凑布局默认把 name 存成 path 后缀；name != basename 时必须原样保留。
+  Index idx;
+  idx.build(std::vector<FileEntry>{{"/a/path.bin", "logical-name", 5, 1, false, 1}});
+  std::vector<SearchResult> out;
+  bool tr;
+  idx.search("logical", SortKey::Name, 0, false, false, out, tr);
+  CHECK_EQ(out.size(), (size_t)1);
+  CHECK_EQ(out[0].entry.name, std::string("logical-name"));
+  CHECK_EQ(out[0].entry.path, std::string("/a/path.bin"));
+  idx.search("path.bin", SortKey::Name, 0, false, false, out, tr);
+  CHECK(out.empty());  // 仅按 name 匹配，path 不参与
+
+  idx.remove("/a/path.bin");
+  idx.add({"/a/path.bin", "logical-name", 5, 1, false, 1});
+  idx.search("logical", SortKey::Name, 0, false, false, out, tr);
+  CHECK_EQ(out.size(), (size_t)1);
+  CHECK_EQ(out[0].entry.name, std::string("logical-name"));
+}
+
+TEST(index_arena_compaction) {
+  // 大量删除制造 arena 碎片 -> 触发压缩；压缩后剩余条目仍可正确查询。
+  const std::string pad(180, 'x');
+  std::vector<FileEntry> v;
+  v.reserve(30000);
+  for (int i = 0; i < 30000; ++i)
+    v.push_back({"/d/" + pad + "/f" + std::to_string(i), "f" + std::to_string(i), 1, i, false,
+                 static_cast<uint64_t>(i)});
+  Index idx;
+  idx.build(std::move(v));
+  const size_t est0 = idx.memoryEstimate();
+  size_t removed = 0;
+  for (int i = 0; i < 29000; ++i)
+    if (idx.remove("/d/" + pad + "/f" + std::to_string(i))) ++removed;
+  CHECK_EQ(removed, (size_t)29000);
+  CHECK_EQ(idx.size(), (size_t)1000);
+  CHECK(idx.memoryEstimate() < est0);  // arena 已被压缩回收
+  std::vector<SearchResult> out;
+  bool tr;
+  idx.search("f29999", SortKey::Path, 0, false, false, out, tr);
+  CHECK_EQ(out.size(), (size_t)1);
+  CHECK_EQ(out[0].entry.path, std::string("/d/" + pad + "/f29999"));
+}
+
+TEST(index_replace_semantics) {
+  Index idx;
+  idx.build(sample());
+  idx.replace("/a/report.pdf", {"/a/renamed.pdf", "renamed.pdf", 9, 5, false, 1});
+  std::vector<SearchResult> out;
+  bool tr;
+  idx.search("report", SortKey::Path, 0, false, false, out, tr);
+  CHECK_EQ(out.size(), (size_t)2);  // Report.docx + reports；旧 report.pdf 已移除
+  for (const auto& r : out) CHECK(r.entry.path != std::string("/a/report.pdf"));
+  idx.search("renamed", SortKey::Name, 0, false, false, out, tr);
+  CHECK_EQ(out.size(), (size_t)1);
+  CHECK_EQ(out[0].entry.name, std::string("renamed.pdf"));
+}
+
+TEST(index_add_update_no_duplicate) {
+  Index idx;
+  idx.build(std::vector<FileEntry>{{"/a/x", "x", 1, 1, false, 1}});
+  for (int i = 0; i < 100; ++i) idx.add({"/a/x", "x", 10, 2, false, 1});
+  CHECK_EQ(idx.size(), (size_t)1);
+  CHECK_EQ(idx.totalBytes(), (uint64_t)10);
+}
+
 TEST(base64_roundtrip_and_strict) {
   CHECK_EQ(base64Encode(""), std::string(""));
   CHECK_EQ(base64Encode("f"), std::string("Zg=="));
