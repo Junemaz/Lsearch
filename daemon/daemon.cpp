@@ -178,7 +178,11 @@ void Daemon::buildSearchResponse(const std::string& line, std::string& out) {
     out = "ERR bad args\n";
     return;
   }
-  size_t limit = static_cast<size_t>(atoll(head[1].c_str()));
+  size_t limit = 0;
+  if (!parseLimit(head[1], limit)) {
+    out = "ERR bad limit\n";
+    return;
+  }
   bool dirs_only = head[2] == "1";
   bool files_only = head[3] == "1";
   SortKey sort;
@@ -211,7 +215,11 @@ void Daemon::buildSearchExResponse(const std::string& line, std::string& out) {
     out = "ERR bad under\n";
     return;
   }
-  size_t limit = static_cast<size_t>(atoll(head[1].c_str()));
+  size_t limit = 0;
+  if (!parseLimit(head[1], limit)) {
+    out = "ERR bad limit\n";
+    return;
+  }
   bool dirs_only = head[2] == "1";
   bool files_only = head[3] == "1";
   SortKey sort;
@@ -249,7 +257,11 @@ void Daemon::buildSearch3Response(const std::string& line, std::string& out) {
     out = "ERR bad under\n";
     return;
   }
-  size_t limit = static_cast<size_t>(atoll(head[1].c_str()));
+  size_t limit = 0;
+  if (!parseLimit(head[1], limit)) {
+    out = "ERR bad limit\n";
+    return;
+  }
   bool dirs_only = head[2] == "1";
   bool files_only = head[3] == "1";
   SortKey sort;
@@ -355,25 +367,36 @@ void Daemon::handleRequest(const std::string& line, std::string& out) {
   } else if (cmd == "rebuild") {
     startRebuild();
     out = "OK\n";
-  } else if (cmd == "add-path" && !arg.empty()) {
-    bool has = false;
-    for (const auto& p : cfg_.paths)
-      if (p == arg) { has = true; break; }
-    if (!has) {
-      cfg_.paths.push_back(arg);
+  } else if (cmd == "add-path") {
+    std::string why;
+    if (!validConfigPath(arg, why)) {
+      out = "ERR bad path\n";
+    } else {
+      bool has = false;
+      for (const auto& p : cfg_.paths)
+        if (p == arg) { has = true; break; }
+      if (!has) {
+        cfg_.paths.push_back(arg);
+        cfg_.save(cfg_.config_file);
+      }
+      startRebuild();
+      out = "OK\n";
+    }
+  } else if (cmd == "remove-path") {
+    // 仅查非空：历史误加入的含逗号条目需能按精确匹配移除（Spec 013 R1b）
+    if (arg.empty()) {
+      out = "ERR bad path\n";
+    } else {
+      cfg_.paths.erase(std::remove(cfg_.paths.begin(), cfg_.paths.end(), arg), cfg_.paths.end());
+      {
+        std::unique_lock<std::shared_mutex> lk(idxLock_);
+        idx_.removePathAndSubtree(arg);
+        db_.removeSubtree(arg);
+      }
+      restartWatcher();
       cfg_.save(cfg_.config_file);
+      out = "OK\n";
     }
-    startRebuild();
-    out = "OK\n";
-  } else if (cmd == "remove-path" && !arg.empty()) {
-    cfg_.paths.erase(std::remove(cfg_.paths.begin(), cfg_.paths.end(), arg), cfg_.paths.end());
-    {
-      std::unique_lock<std::shared_mutex> lk(idxLock_);
-      idx_.removePathAndSubtree(arg);
-      db_.removeSubtree(arg);
-    }
-    restartWatcher();
-    out = "OK\n";
   } else if (cmd == "get-config") {
     out = "OK\n";
     out += "paths=" + joinList(cfg_.paths, ",") + "\n";
@@ -388,17 +411,41 @@ void Daemon::handleRequest(const std::string& line, std::string& out) {
     if (v.empty()) {
       out = "ERR paths must not be empty\n";
     } else {
-      cfg_.paths = std::move(v);
-      cfg_.save(cfg_.config_file);
-      startRebuild();
-      out = "OK\n";
+      std::string why;
+      bool ok = true;
+      for (const auto& p : v)
+        if (!validConfigPath(p, why)) { ok = false; break; }
+      if (!ok) {
+        out = "ERR bad path\n";
+      } else {
+        cfg_.paths = std::move(v);
+        cfg_.save(cfg_.config_file);
+        startRebuild();
+        out = "OK\n";
+      }
     }
   } else if (cmd == "set-excludes") {
     // 传 "_" 表示清空排除列表
-    cfg_.excludes = (arg == "_") ? std::vector<std::string>{} : split(arg, ',');
-    cfg_.save(cfg_.config_file);
-    startRebuild();
-    out = "OK\n";
+    if (arg == "_") {
+      cfg_.excludes.clear();
+      cfg_.save(cfg_.config_file);
+      startRebuild();
+      out = "OK\n";
+    } else {
+      auto v = split(arg, ',');
+      std::string why;
+      bool ok = true;
+      for (const auto& p : v)
+        if (!validConfigPath(p, why)) { ok = false; break; }
+      if (!ok) {
+        out = "ERR bad path\n";
+      } else {
+        cfg_.excludes = std::move(v);
+        cfg_.save(cfg_.config_file);
+        startRebuild();
+        out = "OK\n";
+      }
+    }
   } else if (cmd == "set-opts") {
     // set-opts <hidden 0|1> <follow 0|1>
     auto v = split(arg, ' ');

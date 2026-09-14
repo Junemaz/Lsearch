@@ -19,6 +19,12 @@
 //   set-excludes <csv>         ← 整体替换排除前缀（"_" 表示清空）
 //   set-opts <hidden> <follow> ← 隐藏文件/跟随符号链接（0|1）
 //
+// 路径参数（Spec 013）：add-path 的参数**不做 CSV 分割**（整串即一个路径）；
+//   set-paths / set-excludes 才按逗号取 CSV，且每个元素须合法。合法路径 =
+//   非空、不含 ','、不含控制字符（<0x20 与 0x7f）、无首尾空格/TAB、长度 ≤ 4096。
+//   remove-path 仅校验非空（以便精确移除历史含逗号条目），成功移除后**落盘**到
+//   配置文件（重启不复活）。
+//
 // under64：绝对路径子树前缀的**严格 base64**（标准字母表 + '=' 填充）；
 //   空/全量用单字符 "-"（"-" 不是合法 base64，无歧义）。解码拒绝空白/非法字符/
 //   非 4 倍数长度/超长（>8192）/含 NUL；解码后含控制字符（<0x20）亦视为非法。
@@ -51,6 +57,8 @@
 //   ERR bad under             —— search2/search3/count2 缺字段或 under64 非法
 //   ERR unknown command       —— 未知动词
 //   ERR paths must not be empty —— set-paths 传空
+//   ERR bad path              —— 路径参数违反上述路径规则
+//   ERR bad limit             —— search/search2/search3 的 limit 非纯十进制或 > 1048576
 //   ERR bad opts              —— set-opts 参数不足
 //   ERR line too long         —— 单行请求超过 1 MiB（随后关闭该连接）
 #include <cstddef>

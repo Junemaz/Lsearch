@@ -39,4 +39,15 @@ std::string base64Encode(const std::string& in);
 bool base64Decode(const std::string& in, std::string& out);
 inline constexpr std::size_t kBase64MaxEncoded = 8192;
 
+// 配置路径校验（Spec 013 R1）：拒绝无法在逗号行式配置中忠实往返的路径。
+// 合法 iff 非空、不含 ','、不含控制字节（<0x20 与 0x7f）、无首尾空格/TAB、
+// 长度 <= kConfigPathMax。失败时 why 说明原因。
+inline constexpr std::size_t kConfigPathMax = 4096;
+bool validConfigPath(const std::string& p, std::string& why);
+
+// limit 严格校验（Spec 013 R2）：纯十进制 ASCII 数字、非空、无符号/空白，且
+// 0 <= value <= kLimitMax；前导零按十进制接受（"0200" -> 200）。成功时写入 out。
+inline constexpr std::size_t kLimitMax = 1048576;
+bool parseLimit(const std::string& s, std::size_t& out);
+
 }  // namespace lsearch
