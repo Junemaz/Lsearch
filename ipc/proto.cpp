@@ -34,5 +34,38 @@ bool parseResultLine(const std::string& line, bool& is_dir, long long& size,
   return true;
 }
 
+std::string escapeField(const std::string& s) {
+  std::string out;
+  out.reserve(s.size());
+  for (char c : s) {
+    switch (c) {
+      case '\\': out += "\\\\"; break;
+      case '\t': out += "\\t"; break;
+      case '\n': out += "\\n"; break;
+      case '\r': out += "\\r"; break;
+      default: out += c; break;
+    }
+  }
+  return out;
+}
+
+std::string unescapeField(const std::string& s) {
+  std::string out;
+  out.reserve(s.size());
+  for (size_t i = 0; i < s.size(); ++i) {
+    if (s[i] == '\\' && i + 1 < s.size()) {
+      switch (s[i + 1]) {
+        case '\\': out += '\\'; ++i; continue;
+        case 't': out += '\t'; ++i; continue;
+        case 'n': out += '\n'; ++i; continue;
+        case 'r': out += '\r'; ++i; continue;
+        default: break;
+      }
+    }
+    out += s[i];
+  }
+  return out;
+}
+
 }  // namespace proto
 }  // namespace lsearch

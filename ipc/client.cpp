@@ -27,6 +27,7 @@ void Client::close() {
   }
   recvBuf_.clear();
   v2_ = -1;
+  v3_ = -1;
   lastSearchLegacy_ = false;
 }
 
@@ -133,6 +134,16 @@ bool Client::search(const std::string& query, SortKey sort, size_t limit,
                     bool dirs_only, bool files_only,
                     std::vector<SearchResult>& out, size_t* total, std::string& err) {
   out.clear();
+  // v3 可用时走 search3（帧完整性，path 已解码），供 CLI/TUI/GUI 的默认快路径复用，
+  // 前端零改动即可拿到字节精确路径；legacy total 语义保持为返回条数。旧 daemon 无
+  // search3 → 下面原样走 legacy `search`，线上字节不变。
+  if (supportsV3()) {
+    SearchOutcome oc;
+    if (!searchEx(query, sort, limit, dirs_only, files_only, "", oc, err)) return false;
+    out = std::move(oc.results);
+    if (total) *total = out.size();
+    return true;
+  }
   std::string req = "search " + std::to_string(limit) + " " + (dirs_only ? "1" : "0") + " " +
                     (files_only ? "1" : "0") + " " + sortKeyName(sort) + " " + query;
   if (!writeLine(req, err)) return false;
@@ -182,6 +193,30 @@ bool Client::searchLegacyFallback(const std::string& query, SortKey sort, size_t
   return true;
 }
 
+bool Client::readResultRows(bool unescape, SearchOutcome& out, std::string& err) {
+  std::string line;
+  bool eof = false;
+  while (true) {
+    if (!readLine(line, eof, err)) return false;
+    if (line == "END") break;
+    bool is_dir, pm;
+    long long size, mtime;
+    std::string path;
+    if (proto::parseResultLine(line, is_dir, size, mtime, pm, path)) {
+      if (unescape) path = proto::unescapeField(path);
+      SearchResult r;
+      r.entry.path = path;
+      r.entry.name = baseName(path);
+      r.entry.is_dir = is_dir;
+      r.entry.size = size;
+      r.entry.mtime = mtime;
+      r.path_matched = pm;
+      out.results.push_back(std::move(r));
+    }
+  }
+  return true;
+}
+
 bool Client::searchEx(const std::string& query, SortKey sort, size_t limit,
                       bool dirs_only, bool files_only, const std::string& under,
                       SearchOutcome& out, std::string& err) {
@@ -189,6 +224,36 @@ bool Client::searchEx(const std::string& query, SortKey sort, size_t limit,
   out.total = 0;
   out.total_capped = false;
   lastSearchLegacy_ = false;
+
+  // v3 可用：优先 search3（path 已转义），解码后还原真实字节。
+  if (supportsV3()) {
+    const std::string under64 = under.empty() ? "-" : base64Encode(under);
+    const std::string req = "search3 " + std::to_string(limit) + " " + (dirs_only ? "1" : "0") +
+                            " " + (files_only ? "1" : "0") + " " + sortKeyName(sort) + " " +
+                            under64 + " " + query;
+    if (!writeLine(req, err)) return false;
+    std::string line;
+    bool eof = false;
+    if (!readLine(line, eof, err)) return false;
+    if (line == "ERR unknown command") {
+      v3_ = 0;  // capabilities 与实测不一致：降级到 search2/legacy
+    } else {
+      if (!startsWith(line, "OK")) {
+        err = line;
+        return false;
+      }
+      unsigned long long returned = 0, total = 0;
+      int capped = 0;
+      if (sscanf(line.c_str(), "OK %llu %llu %d", &returned, &total, &capped) != 3) {
+        err = "bad search3 reply: " + line;
+        return false;
+      }
+      (void)returned;
+      out.total = static_cast<uint64_t>(total);
+      out.total_capped = (capped != 0);
+      return readResultRows(true, out, err);
+    }
+  }
 
   // v2 已确认不可用：空 under 走 legacy 兜底；非空 under 绝不能静默丢弃。
   if (v2_ == 0) {
@@ -229,25 +294,7 @@ bool Client::searchEx(const std::string& query, SortKey sort, size_t limit,
   (void)returned;
   out.total = static_cast<uint64_t>(total);
   out.total_capped = (capped != 0);
-
-  while (true) {
-    if (!readLine(line, eof, err)) return false;
-    if (line == "END") break;
-    bool is_dir, pm;
-    long long size, mtime;
-    std::string path;
-    if (proto::parseResultLine(line, is_dir, size, mtime, pm, path)) {
-      SearchResult r;
-      r.entry.path = path;
-      r.entry.name = baseName(path);
-      r.entry.is_dir = is_dir;
-      r.entry.size = size;
-      r.entry.mtime = mtime;
-      r.path_matched = pm;
-      out.results.push_back(std::move(r));
-    }
-  }
-  return true;
+  return readResultRows(false, out, err);
 }
 
 bool Client::countLegacyFallback(const std::string& query, bool dirs_only, bool files_only,
@@ -333,6 +380,25 @@ bool Client::supportsV2() {
   }
   v2_ = hasSearch2 ? 1 : 0;  // capabilities 成功即为确定性结论
   return v2_ == 1;
+}
+
+bool Client::supportsV3() {
+  if (v3_ >= 0) return v3_ == 1;
+  std::vector<std::string> cmds;
+  std::string err;
+  if (!capabilities(cmds, err)) {
+    if (err == "ERR unknown command") v3_ = 0;  // 旧 daemon：确定性不可用
+    return false;  // 瞬时错误不缓存（v3_ 保持 -1），下次调用重试
+  }
+  bool hasSearch3 = false;
+  for (const auto& c : cmds) {
+    if (c == "search3") {
+      hasSearch3 = true;
+      break;
+    }
+  }
+  v3_ = hasSearch3 ? 1 : 0;
+  return v3_ == 1;
 }
 
 bool Client::stats(std::vector<std::pair<std::string, std::string>>& kv, std::string& err) {

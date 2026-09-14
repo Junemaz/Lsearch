@@ -37,6 +37,7 @@ class Daemon {
   void handleRequest(const std::string& line, std::string& out);
   void buildSearchResponse(const std::string& line, std::string& out);
   void buildSearchExResponse(const std::string& line, std::string& out);
+  void buildSearch3Response(const std::string& line, std::string& out);
   void buildCountExResponse(const std::string& line, std::string& out);
   void serveConnection(int fd);
 

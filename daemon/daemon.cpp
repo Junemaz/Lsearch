@@ -135,8 +135,11 @@ void Daemon::startRebuild() {
 
 namespace {
 constexpr const char* kSupportedCommands =
-    "ping,version,stats,search,search2,count2,capabilities,rebuild,"
+    "ping,version,stats,search,search2,search3,count2,capabilities,rebuild,"
     "add-path,remove-path,shutdown,get-config,set-paths,set-excludes,set-opts";
+
+// R5：单行请求上限 1 MiB（防本地内存 DoS）。
+constexpr size_t kMaxRequestLine = 1u << 20;
 
 // under64: "-" = 全量；否则严格 base64。解码后拒绝控制字符（<0x20）。
 bool decodeUnderToken(const std::string& tok, std::string& under) {
@@ -153,6 +156,15 @@ bool decodeUnderToken(const std::string& tok, std::string& under) {
 void appendRows(const std::vector<SearchResult>& res, std::string& out) {
   for (const auto& r : res) {
     out += r.entry.path + "\t" + (r.entry.is_dir ? "1" : "0") + "\t" +
+           std::to_string(r.entry.size) + "\t" + std::to_string(r.entry.mtime) + "\t" +
+           (r.path_matched ? "1" : "0") + "\n";
+  }
+}
+
+// search3：仅 path 字段转义，数字字段不转义（见 ipc/proto.h 转义表）。
+void appendRowsEscaped(const std::vector<SearchResult>& res, std::string& out) {
+  for (const auto& r : res) {
+    out += proto::escapeField(r.entry.path) + "\t" + (r.entry.is_dir ? "1" : "0") + "\t" +
            std::to_string(r.entry.size) + "\t" + std::to_string(r.entry.mtime) + "\t" +
            (r.path_matched ? "1" : "0") + "\n";
   }
@@ -230,6 +242,44 @@ void Daemon::buildSearchExResponse(const std::string& line, std::string& out) {
   out += "END\n";
 }
 
+void Daemon::buildSearch3Response(const std::string& line, std::string& out) {
+  std::vector<std::string> head;
+  std::string rest;
+  if (!proto::splitHead(line, 6, head, rest)) {
+    out = "ERR bad under\n";
+    return;
+  }
+  size_t limit = static_cast<size_t>(atoll(head[1].c_str()));
+  bool dirs_only = head[2] == "1";
+  bool files_only = head[3] == "1";
+  SortKey sort;
+  if (!sortKeyFromName(head[4], sort)) {
+    out = "ERR bad sort\n";
+    return;
+  }
+  std::string under;
+  if (!decodeUnderToken(head[5], under)) {
+    out = "ERR bad under\n";
+    return;
+  }
+  std::string verr;
+  if (!validateQuery(rest, verr)) {
+    for (char& c : verr)
+      if (c == '\n' || c == '\r') c = ' ';
+    out = "ERR bad regex: " + verr + "\n";
+    return;
+  }
+  SearchOutcome oc;
+  {
+    std::shared_lock<std::shared_mutex> lk(idxLock_);
+    idx_.searchEx(rest, sort, limit, dirs_only, files_only, under, oc);
+  }
+  out = "OK " + std::to_string(oc.results.size()) + " " + std::to_string(oc.total) + " " +
+        (oc.total_capped ? "1" : "0") + " esc=1\n";
+  appendRowsEscaped(oc.results, out);
+  out += "END\n";
+}
+
 void Daemon::buildCountExResponse(const std::string& line, std::string& out) {
   std::vector<std::string> head;
   std::string rest;
@@ -296,6 +346,8 @@ void Daemon::handleRequest(const std::string& line, std::string& out) {
     buildSearchResponse(line, out);
   } else if (cmd == "search2") {
     buildSearchExResponse(line, out);
+  } else if (cmd == "search3") {
+    buildSearch3Response(line, out);
   } else if (cmd == "count2") {
     buildCountExResponse(line, out);
   } else if (cmd == "capabilities") {
@@ -378,9 +430,16 @@ void Daemon::serveConnection(int fd) {
       break;
     }
     buf.append(tmp, static_cast<size_t>(n));
+    // R5：单行请求上限 1 MiB。超限（含无换行的超长残行）写错误并关闭本连接，
+    // 不影响其他连接；recv 分片大小保持不变。
+    bool tooLong = buf.find('\n') == std::string::npos && buf.size() > kMaxRequestLine;
     size_t pos;
-    while ((pos = buf.find('\n')) != std::string::npos) {
+    while (!tooLong && (pos = buf.find('\n')) != std::string::npos) {
       std::string line = buf.substr(0, pos);
+      if (line.size() > kMaxRequestLine) {
+        tooLong = true;
+        break;
+      }
       buf.erase(0, pos + 1);
       if (line.empty()) continue;
       std::string out;
@@ -395,6 +454,12 @@ void Daemon::serveConnection(int fd) {
         sent += static_cast<size_t>(w);
       }
       if (!running_.load()) break;
+      tooLong = buf.find('\n') == std::string::npos && buf.size() > kMaxRequestLine;
+    }
+    if (tooLong) {
+      const char msg[] = "ERR line too long\n";
+      (void)::send(fd, msg, sizeof(msg) - 1, MSG_NOSIGNAL);
+      break;
     }
   }
 done:
