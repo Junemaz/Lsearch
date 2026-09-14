@@ -39,7 +39,7 @@ TUI 只实现核心功能、GUI 后续接入，均不改动 `core`。
 | 内存热索引 | 排序数组 + 路径哈希 | 守护进程常驻，查询在主进程内零 IPC；预计算小写 name/path 加速匹配 |
 | 检索语义 | 大小写不敏感子串；含 `* ?` 转通配符；`re:` 前缀转 ECMAScript 正则；可选 `under` 子树过滤 | 仅匹配 basename（不匹配完整路径）；支持按 name/path/size/mtime 排序；`under` 为绝对路径前缀（原始字节、大小写敏感，`path==under || startsWith(path, under+"/")`）；正则为回溯引擎，病态模式可能长时间占用搜索（见 Spec 008「已知限制」） |
 | 计数/分页语义 | 协议 v2/v3（Spec 010/012） | `search`/`search2`/`count2` 在候选上限（5 万）处停止：命中 ≤cap 时 `total` 精确、页间稳定，>cap 时 `total_capped=1`、`total` 为下界、不承诺 >cap 页稳定；`count2` 免物化免排序。`search3`（Spec 012）与 `search2` 同语义，仅把结果行 path 转义以保帧完整；客户端探测到 `search3` 后默认路径也走它，否则回退 `search2`/`search`（旧 daemon 字节不变） |
-| 增量更新 | inotify | 为内存索引中的每个目录加 watch；新目录在 `IN_CREATE` 时递归挂接；`IN_MODIFY/ATTRIB` 触发 re-stat |
+| 增量更新 | inotify | 为内存索引中的每个目录**与索引根本身**加 watch（`collectDirs()` 不含根，需显式并入）；新目录在 `IN_CREATE`/`IN_MOVED_TO` 时递归挂接；事件按位独立处理（先删旧、后加新），`IN_MOVED_FROM` 仅当路径确实消失时才删除，故编辑器"临时文件→rename"保存能正确落索引。**隐藏/排除判定走单一谓词 `Config::shouldIndexPath`**（初始扫描与事件路径共用，避免分叉）；`Watcher::stop()` 清空 wd 映射，保证重启后 watch 不丢失（Spec 016） |
 | 排除 | 前缀匹配 + 隐藏文件开关 | 默认排除 /proc /sys /dev /run 与 `~/.cache`、回收站 |
 | IPC | 明文行协议 | 简单、可用 socat 调试；D-Bus 作为**并存的桌面门面**（Spec 009：`lsearch-dbus` 注册会话总线 `com.lsearch.Daemon`，按需激活，底层仍复用同一 socket 客户端） |
 | 并发 | `std::shared_mutex` | 搜索读共享锁、增量写独占锁；SQLite WAL 处理 DB 读写并发 |

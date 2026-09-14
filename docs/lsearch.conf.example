@@ -3,10 +3,10 @@ paths = /home/code
 # paths = /home/code,/data,/mnt
 
 # 排除的路径前缀（命中即跳过，含其下所有内容）
-excludes = /proc,/sys,/dev,/run,/snap,/home/code/.cache
+excludes = /proc,/sys,/dev,/run,/snap,/home/code/.cache,/home/code/.git
 
-# 是否索引以 . 开头的隐藏文件/目录（0/1，默认 0）
-index_hidden = 0
+# 是否索引以 . 开头的隐藏文件/目录（0/1，默认 1；默认排除 .git/.cache/回收站）
+index_hidden = 1
 
 # 是否跟随符号链接（0/1，默认 0）
 follow_symlinks = 0
