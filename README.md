@@ -136,6 +136,11 @@ TUI 自动化自测（tmux 伪终端注入按键并断言画面；需装 tmux）
 ```bash
 ./scripts/self-test-tui.sh      # 输入即搜 / 通配符 / F5 重建 / Esc 清空 / Ctrl+Q 退出
 ```
+内存 / 延迟基准（Spec 017；复制真实 DB 到隔离环境，不打扰运行中的 daemon）：
+```bash
+./scripts/bench-search.sh --db ~/.local/share/lsearch/lsearch.db   # RSS + P50/P95
+./scripts/bench-search.sh --gen 20000                              # 合成树
+```
 
 ## 配置（简单纯文本，首次运行自动生成）
 ```ini

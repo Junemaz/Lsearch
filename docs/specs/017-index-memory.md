@@ -1,6 +1,6 @@
 # Lsearch Spec 017 — 索引内存精简与可选低内存模式
 
-Status: **Proposed**
+Status: **In Progress**
 
 ## Why
 真实索引（317,527 项）实测：
@@ -69,11 +69,12 @@ When 切换 `hot_index` 并重启
 Then 行为与提示一致，无残留状态
 
 ## Task
+- [x] 基准脚本 `scripts/bench-search.sh`（DB 副本 / 合成树；RSS + P50/P95；隔离环境）
 - [ ] 设计并实现 arena/偏移布局（保持匹配与排序语义）
 - [ ] 开放寻址 path 索引；去重 name
-- [ ] `hot_index` 配置 + `stats`/`get-config`/`set-opts` 暴露 + 提示
+- [ ] `hot_index` 配置 + `stats`/`get-config` 暴露 + 提示
 - [ ] `sqlite` 查询模式（复用 `db_`；并发契约遵循 Spec 015）
-- [ ] benchmark 脚本 + 证据（RSS / P50 / P95 / 条目数）
+- [ ] benchmark 证据（RSS / P50 / P95 / 条目数，memory vs sqlite）
 - [ ] 全量复跑 + 文档同步 + Evidence → Done
 
 ## Deliverable
@@ -89,6 +90,18 @@ daemon RSS = 243.1 MiB  (~800 B/项)
 SQLite LIKE %report% -> 48.2 ms ; %log% -> 25.5 ms ; %.md% -> 27.2 ms ; %zzz_absent% -> 24.7 ms
 内存路径（lsearch --count，含启动+IPC）: report 12 ms ; log 8 ms ; zzz_absent 7 ms
 ```
+
+### 基线（`scripts/bench-search.sh --db <真实 DB 副本>`，016 构建，隔离环境）
+```
+索引：files=317548 dirs=37764 size=25.9 GB（016 修复后不再溢出）
+内存：RSS=194.3 MiB   ≈ 642 B/项
+查询延迟（lsearch --count，含启动+IPC，reps=7）：
+  'report'      count=187   P50=3.1 ms  P95=3.8 ms
+  '.md'         count=6414  P50=3.7 ms  P95=4.4 ms
+  'zzz_absent'  count=0     P50=3.0 ms  P95=3.4 ms
+```
+**017 目标**：同等条目数下 RSS 降到 ≤100 MiB（或至少腰斩），且 P50 不劣化；`hot_index=sqlite`
+需给出同 corpus 的延迟对照（预期 ~25–48 ms 量级）与逐字节一致的结果。
 
 ## 依赖
 与 [Spec 015](015-daemon-concurrency.md)（并发契约）与 [Spec 016](016-watcher-correctness.md)
