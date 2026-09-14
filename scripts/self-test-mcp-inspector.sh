@@ -102,7 +102,15 @@ def bad(name, msg=""):
     global failed; failed += 1; print(f"  FAIL  {name} {msg}".rstrip())
 
 def inspector(extra):
-    cmd = [INSPECTOR_BIN, "--cli", MCP] + extra
+    # Inspector 默认以「精简环境」启动 MCP server（只带 HOME）。显式用 -e 传 XDG_*，
+    # 让 lsearch-mcp 连到本脚本的隔离 daemon，而不是落到回退路径并自动拉起新 daemon
+    # —— 后者在 CI 慢机上会因新 daemon 尚未就绪而让 index_stats 返回 isError（rc=5）。
+    cmd = [INSPECTOR_BIN]
+    for key in ("HOME", "XDG_RUNTIME_DIR", "XDG_DATA_HOME", "XDG_CONFIG_HOME"):
+        val = os.environ.get(key)
+        if val:
+            cmd += ["-e", f"{key}={val}"]
+    cmd += ["--cli", MCP] + extra
     return subprocess.run(cmd, capture_output=True, text=True, env=os.environ)
 
 # ---- tools/list ----
