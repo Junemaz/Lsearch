@@ -16,8 +16,9 @@ Config Config::defaults() {
   if (!home.empty()) {
     c.excludes.push_back(home + "/.cache");
     c.excludes.push_back(home + "/.local/share/Trash");
+    c.excludes.push_back(home + "/.git");
   }
-  c.index_hidden = false;
+  c.index_hidden = true;
   c.follow_symlinks = false;
   return c;
 }
@@ -101,6 +102,14 @@ bool Config::isExcluded(const std::string& path) const {
 
 bool Config::isHiddenName(const std::string& name) const {
   return !name.empty() && name[0] == '.';
+}
+
+bool Config::shouldIndexName(const std::string& name) const {
+  return index_hidden || !isHiddenName(name);
+}
+
+bool Config::shouldIndexPath(const std::string& path) const {
+  return !isExcluded(path) && shouldIndexName(baseName(path));
 }
 
 }  // namespace lsearch

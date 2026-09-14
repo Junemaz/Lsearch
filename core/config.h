@@ -26,6 +26,11 @@ struct Config {
   bool isExcluded(const std::string& path) const;
   bool isHiddenName(const std::string& name) const;
 
+  // 单一"是否索引"判定（Spec 016）：excludes 命中，或（隐藏名 && !index_hidden）时跳过。
+  // 全量扫描与 inotify 各事件路径必须共用此判定，避免分支语义漂移。
+  bool shouldIndexName(const std::string& name) const;
+  bool shouldIndexPath(const std::string& path) const;
+
   static std::string defaultConfigFile();
   static std::string defaultDbFile();
   static std::string defaultSockFile();

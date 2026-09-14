@@ -331,6 +331,113 @@ d, _ = talk(b"search2 50 0 0 name - \n")
 (ok if d.startswith(b"OK 0 0 0\n") else bad)("空 query -> OK 0（非错误）", repr(d[:40]))
 
 # ============================================================================
+# Spec 016 — watcher 增量正确性：隐藏过滤单一判定 / mv 原子保存 / 统计不回绕。
+# set-opts <hidden> <follow> 会触发重建；必须等 rebuilding=0（watcher 已重启）
+# 后再制造文件系统事件，否则事件窗口内 watcher 处于停止状态会漏事件。
+# ============================================================================
+def wait_rebuild(timeout=30.0):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        d, _ = talk(b"stats\n")
+        if b"rebuilding=0\n" in d:
+            return True
+        time.sleep(0.2)
+    return False
+
+def set_hidden(v):
+    d, _ = talk(b"set-opts %d 0\n" % v)
+    return d == b"OK\n" and wait_rebuild()
+
+def count(q):
+    d, _ = talk(b"count2 0 0 - " + q + b"\n")
+    if not d.startswith(b"OK "):
+        return -1
+    return int(d.split(b" ")[1])
+
+def expect_count(name, q, want):
+    n = count(q)
+    (ok if n == want else bad)(name, "count(%r)=%d want=%d" % (q, n, want))
+
+SUB = os.path.join(HOME, "sub")
+def w(rel, data=b"x"):
+    p = os.path.join(HOME, rel)
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    with open(p, "wb") as f:
+        f.write(data)
+
+# —— index_hidden=1（新默认）：隐藏文件/目录必须被索引 ——
+n = "spec016 set-opts 1 -> OK 且重建完成"
+(ok if set_hidden(1) else bad)(n)
+# 隐藏文件 create+modify（旧缺陷：modify 分支漏隐藏过滤 -> 只有 =1 时才该出现）
+w("sub/.hid_on.md")
+time.sleep(0.8)
+expect_count("spec016 hidden=1 隐藏文件被索引", b".hid_on.md", 1)
+# mv temp -> 可见名（编辑器原子保存）
+w("sub/tmp_vis_on")
+time.sleep(0.6)
+os.rename(os.path.join(SUB, "tmp_vis_on"), os.path.join(SUB, "vis_on.md"))
+time.sleep(0.8)
+expect_count("spec016 hidden=1 mv temp->可见名 被索引", b"vis_on.md", 1)
+expect_count("spec016 hidden=1 mv 旧名不残留", b"tmp_vis_on", 0)
+# mv temp -> 隐藏名
+w("sub/tmp_hid_on")
+time.sleep(0.6)
+os.rename(os.path.join(SUB, "tmp_hid_on"), os.path.join(SUB, ".hid_mv_on.md"))
+time.sleep(0.8)
+expect_count("spec016 hidden=1 mv temp->隐藏名 被索引", b".hid_mv_on.md", 1)
+expect_count("spec016 hidden=1 mv 旧名不残留(隐藏)", b"tmp_hid_on", 0)
+# 隐藏目录内容
+os.makedirs(os.path.join(SUB, ".hid_dir_on"), exist_ok=True)
+time.sleep(0.6)
+w("sub/.hid_dir_on/inside_on.md")
+time.sleep(0.8)
+expect_count("spec016 hidden=1 隐藏目录内容被索引", b"inside_on.md", 1)
+
+# —— index_hidden=0：所有事件路径都不得索引隐藏项（F1 回归）——
+n = "spec016 set-opts 0 -> OK 且重建完成"
+(ok if set_hidden(0) else bad)(n)
+w("sub/.hid_off.md")
+time.sleep(0.8)
+expect_count("spec016 hidden=0 隐藏文件(create+modify)不索引", b".hid_off.md", 0)
+# mv temp -> 可见名 仍必须索引（F2）
+w("sub/tmp_vis_off")
+time.sleep(0.6)
+os.rename(os.path.join(SUB, "tmp_vis_off"), os.path.join(SUB, "vis_off.md"))
+time.sleep(0.8)
+expect_count("spec016 hidden=0 mv temp->可见名 被索引", b"vis_off.md", 1)
+expect_count("spec016 hidden=0 mv 旧名不残留", b"tmp_vis_off", 0)
+# mv temp -> 隐藏名 不索引
+w("sub/tmp_hid_off")
+time.sleep(0.6)
+os.rename(os.path.join(SUB, "tmp_hid_off"), os.path.join(SUB, ".hid_mv_off.md"))
+time.sleep(0.8)
+expect_count("spec016 hidden=0 mv temp->隐藏名 不索引", b".hid_mv_off.md", 0)
+expect_count("spec016 hidden=0 mv 旧名不残留(隐藏)", b"tmp_hid_off", 0)
+# 隐藏目录内容不索引
+os.makedirs(os.path.join(SUB, ".hid_dir_off"), exist_ok=True)
+time.sleep(0.6)
+w("sub/.hid_dir_off/inside_off.md")
+time.sleep(0.8)
+expect_count("spec016 hidden=0 隐藏目录内容不索引", b"inside_off.md", 0)
+# 根目录层 mv（F2：索引根必须被监控）
+w("tmp_root_mv")
+time.sleep(0.6)
+os.rename(os.path.join(HOME, "tmp_root_mv"), os.path.join(HOME, "vis_root_mv.md"))
+time.sleep(0.8)
+expect_count("spec016 hidden=0 根目录 mv temp->可见名 被索引", b"vis_root_mv.md", 1)
+expect_count("spec016 hidden=0 根目录 mv 旧名不残留", b"tmp_root_mv", 0)
+
+# —— F3：stats.size 不得出现 2^63 量级回绕 ——
+d, _ = talk(b"stats\n")
+sizes = [ln for ln in d.split(b"\n") if ln.startswith(b"size=")]
+if sizes:
+    sz = int(sizes[0][5:])
+    sane = 0 < sz < (1 << 60)
+    (ok if sane else bad)("spec016 stats.size 合理（无 2^63 回绕）", "size=%d" % sz)
+else:
+    bad("spec016 stats.size 合理（无 2^63 回绕）", "stats 缺少 size 字段")
+
+# ============================================================================
 # Spec 013 — IPC 输入校验与配置往返完整性（R1 / R1b / R2）
 # limit 校验未就绪时（见上方探测）逐条 SKIP(v13)，既有断言不受影响。
 # ============================================================================
